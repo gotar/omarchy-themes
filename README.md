@@ -4,7 +4,7 @@ Center-bar gallery for **[bjarneo/omarchy-themes](https://bjarneo.github.io/omar
 
 Browse, search and preview like on the website, then apply any variant as a native Omarchy theme in one click. Lives in the center of the bar right after the weather widget (****).
 
-![panel](https://bjarneo.github.io/omarchy-themes/og-image.png)
+![Themes Gallery](preview.png)
 
 - **Search** (path + title + tags, debounced, same as site)
 - **Filters with live counts**: tone (`dark`/`light`), color (9 hues), resolution tier range `≥`/`≤` (720p → 8K+)

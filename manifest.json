@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "id": "gotar.omarchy-themes",
+  "name": "Omarchy Themes",
+  "version": "1.0.0",
+  "author": "gotar",
+  "license": "MIT",
+  "description": "Browser for bjarneo.github.io/omarchy-themes: 3,000+ wallpapers, each with five theme variants. Search, filter by tone / color / resolution, and install + apply any variant as a user theme in one click.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "activation": "on-demand",
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Omarchy Themes",
+    "description": "Browse and apply Omarchy Themes variants",
+    "category": "Themes",
+    "allowMultiple": false,
+    "defaultSection": "center"
+  }
+}

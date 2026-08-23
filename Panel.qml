@@ -226,7 +226,8 @@ Panel {
     root.applySlug = v.n
     root.applyPhase = 1
     root.applyMsg = "downloading " + v.n
-    var fallbackP = (root.db && root.detailIdx >= 0) ? root.db.entries[root.detailIdx].p : ""
+    var e = (root.db && root.detailIdx >= 0) ? root.db.entries[root.detailIdx] : null
+    var fallbackP = e ? (e.med || e.p || "") : ""
     applyProc.command = ["/usr/bin/python3", root.scriptPath("apply-theme.py"),
                          v.n, root.baseOf(), v.ct, v.bg, fallbackP].slice()
     applyProc.running = true
@@ -317,17 +318,24 @@ Panel {
     }
     onExited: function(exitCode) {
       if (exitCode === 0) {
-        root.applyPhase = 2
-        root.applyMsg = "applying theme\u2026"
-        themeSetProc.command = ["omarchy", "theme", "set", root.applySlug]
-        themeSetProc.running = true
+        root.applyPhase = 3
+        root.applyMsg = "\u2713 " + root.applySlug + " — reloading"
+        // Close before theme switch — `omarchy theme set` reloads Hyprland+sell
+        // which would kill this Process mid-flight and look like a freeze.
+        root.close()
+        Qt.callLater(function() {
+          if (root.bar && root.bar.run) root.bar.run("omarchy theme set " + root.applySlug)
+          else Quickshell.execDetached(["omarchy", "theme", "set", root.applySlug])
+        })
+        Qt.callLater(function() { root.loadCurrentTheme() })
       } else {
         root.applyPhase = 4
-        if (!root.applyMsg) root.applyMsg = "install failed"
+        if (!root.applyMsg || root.applyMsg.startsWith("downloading")) root.applyMsg = "install failed" + (root.applyMsg ? ": " + root.applyMsg : "")
       }
     }
   }
 
+  // Kept for manual fallback; normal flow now uses detached exec
   Process {
     id: themeSetProc
     running: false

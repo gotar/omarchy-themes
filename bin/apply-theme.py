@@ -22,24 +22,31 @@ import json
 import os
 import sys
 import tempfile
-import urllib.request
-import urllib.error
 
-UA = {"User-Agent": "omarchy-themes-plugin/1.0 (+omarchy shell)"}
-TIMEOUT = 180
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _sec
 
 
 def fail(msg):
-    print(json.dumps({"ok": False, "error": str(msg)}))
-    sys.exit(1)
+    _sec.fail_apply(msg)
 
 
-def try_download(url, dest_dir, name):
+def try_download(base, rel, dest_dir, name, kind):
+    """Stream one allowlisted download to disk with caps + validation."""
+    if not _sec.is_allowed_url(base):
+        return False, "base URL not on allowlist"
+    if not _sec.safe_relpath(rel):
+        return False, "unsafe relative path: %r" % (rel,)
+    url = base.rstrip("/") + "/" + rel
     try:
-        req = urllib.request.Request(url, headers=UA)
-        data = urllib.request.urlopen(req, timeout=TIMEOUT).read()
-    except urllib.error.HTTPError as e:
-        return False, f"HTTP {e.code}: {e.reason}"
+        if kind == "toml":
+            data = _sec.http_get(url, _sec.BYTE_LIMIT_TOML)
+            _sec.validate_toml(data)
+        elif kind == "image":
+            data = _sec.http_get(url, _sec.BYTE_LIMIT_MEDIA)
+            _sec.sniff_image(data)
+        else:
+            return False, "unknown download kind"
     except Exception as e:
         return False, str(e)
     try:
@@ -60,8 +67,14 @@ def main():
     ct = sys.argv[3] if len(sys.argv) >= 4 else ""
     bg = sys.argv[4] if len(sys.argv) >= 5 else ""
     fallback = sys.argv[5] if len(sys.argv) >= 6 else ""
-    if not slug or "/" in slug or slug.startswith(".") or ".." in slug:
-        fail(f"bad slug: {slug!r}")
+    if not slug or "/" in slug or "\\" in slug or slug.startswith("."):
+        fail("bad slug: %r" % (slug,))
+    if not _sec.is_allowed_url(base):
+        fail("base URL not on allowlist")
+    for rel in (ct, bg, fallback):
+        if rel and not _sec.safe_relpath(rel):
+            fail("unsafe path: %r" % (rel,))
+
     themes_root = os.path.expanduser("~/.config/omarchy/themes")
     dest = os.path.join(themes_root, slug)
     if os.path.realpath(os.path.dirname(dest)) != os.path.realpath(themes_root):
@@ -70,28 +83,30 @@ def main():
 
     # colors.toml — required
     if ct:
-        ok, err = try_download(base + "/" + ct.lstrip("/"), dest, "colors.toml")
+        ok, err = try_download(base, ct, dest, "colors.toml", "toml")
         if not ok:
-            fail(f"colors.toml download failed: {err}")
+            fail("colors.toml download failed: %s" % err)
 
     # background — try bg, then fallback (original wallpaper p)
     bg_ok = False
     bg_err = ""
     if bg:
-        ok, err = try_download(base + "/" + bg.lstrip("/"), os.path.join(dest, "backgrounds"), os.path.basename(bg))
+        ok, err = try_download(base, bg, os.path.join(dest, "backgrounds"),
+                               os.path.basename(bg), "image")
         bg_ok = ok
         bg_err = err
     if not bg_ok and fallback:
-        ok2, err2 = try_download(base + "/" + fallback.lstrip("/"), os.path.join(dest, "backgrounds"), os.path.basename(fallback))
+        ok2, err2 = try_download(base, fallback, os.path.join(dest, "backgrounds"),
+                                 os.path.basename(fallback), "image")
         if ok2:
             bg_ok = True
             bg_err = ""
         elif not bg_ok:
-            bg_err = f"{bg_err}; fallback {err2}" if bg_err else err2
+            bg_err = "%s; fallback %s" % (bg_err, err2) if bg_err else err2
 
     result = {"ok": True, "slug": slug, "path": dest}
     if not bg_ok and (bg or fallback):
-        result["warning"] = f"background download failed: {bg_err}"
+        result["warning"] = "background download failed: %s" % bg_err
         result["background_ok"] = False
     else:
         result["background_ok"] = True

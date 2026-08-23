@@ -14,19 +14,18 @@ Exit: 0 on success (prints {"ok":true,"path":...}), 1 on failure.
 """
 import json
 import os
-import sys
 import subprocess
+import sys
 import tempfile
-import urllib.request
-import urllib.error
 
-UA = {"User-Agent": "omarchy-themes-plugin/1.0 (+omarchy shell)"}
-TIMEOUT = 180
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _sec
+
+MIN_CACHED_BYTES = 1024  # keep small/invalid cache entries from being reused
 
 
 def fail(msg):
-    print(json.dumps({"ok": False, "error": str(msg)}))
-    sys.exit(1)
+    _sec.fail_apply(msg)
 
 
 def main():
@@ -36,26 +35,36 @@ def main():
     rel = sys.argv[2].lstrip("/")
     if not rel:
         fail("empty wallpaper path")
+    if not _sec.is_allowed_url(base):
+        fail("base URL not on allowlist")
+    if not _sec.safe_relpath(rel):
+        fail("unsafe wallpaper path: %r" % (rel,))
     url = base + "/" + rel
     cache_dir = os.path.expanduser("~/.cache/gotar.omarchy-themes/wallpapers")
     os.makedirs(cache_dir, exist_ok=True)
     name = os.path.basename(rel)
     dest = os.path.join(cache_dir, name)
 
-    # Download if not cached or if size mismatch? Simple: download if not exists
+    # Reuse the cache only if the entry exists and passes the image sniff;
+    # anything invalid is re-downloaded (and then re-validated).
     need_dl = True
-    if os.path.isfile(dest) and os.path.getsize(dest) > 1024:
-        need_dl = False
+    try:
+        if os.path.isfile(dest):
+            cached = _sec.read_file_capped(dest, _sec.BYTE_LIMIT_MEDIA)
+            if len(cached) > MIN_CACHED_BYTES:
+                _sec.sniff_image(cached, "cached wallpaper")
+                need_dl = False
+    except (OSError, ValueError):
+        need_dl = True
+
     if need_dl:
         try:
-            req = urllib.request.Request(url, headers=UA)
-            data = urllib.request.urlopen(req, timeout=TIMEOUT).read()
+            data = _sec.http_get(url, _sec.BYTE_LIMIT_MEDIA)
+            _sec.sniff_image(data, "wallpaper")
             fd, tmp = tempfile.mkstemp(dir=cache_dir)
             with os.fdopen(fd, "wb") as f:
                 f.write(data)
             os.replace(tmp, dest)
-        except urllib.error.HTTPError as e:
-            fail(f"HTTP {e.code}: {e.reason} for {url}")
         except Exception as e:
             fail(str(e))
 

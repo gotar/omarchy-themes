@@ -70,9 +70,11 @@ Panel {
   // the manifest (https + allowlisted host) and rel must be a safe relative
   // path — anything else yields "" so Image/Process never see it.
   function safeRel(rel) {
+    // Mirrors _sec.safe_relpath: '..' is rejected as a path component, not a
+    // substring, so file names like "img..jpg" still load.
     var s = String(rel || "")
     return s.length <= 512 && /^[A-Za-z0-9_./+@=~-]+$/.test(s)
-      && !s.startsWith("/") && !s.startsWith("\\") && s.indexOf("..") === -1
+      && !s.startsWith("/") && !s.startsWith("\\") && s.split("/").indexOf("..") === -1
       && s.indexOf(":") === -1
   }
   function url(rel) {
@@ -251,7 +253,8 @@ Panel {
     root.applyPhase = 1
     root.applyMsg = "downloading " + v.n
     var e = (root.db && root.detailIdx >= 0) ? root.db.entries[root.detailIdx] : null
-    var fallbackP = e ? (e.med || e.p || "") : ""
+    // Full-res original as the fallback background (med is a downscaled copy).
+    var fallbackP = e ? (e.p || "") : ""
     // wallpaper-only: set image directly, no theme
     if (root.wallpaperOnly) {
       var rel = e ? (e.med || e.p || v.bg || "") : (v.bg || "")
@@ -295,13 +298,20 @@ Panel {
     wallpaperProc.running = true
   }
   function setAutoInterval(sec) { autoIntervalSec = sec }
+  // Label of the currently selected AUTO step ("Off"/"5m"/…), from the
+  // parallel autoOptions/autoLabels arrays.
+  function autoSelLabel() {
+    var i = root.autoOptions.indexOf(root.autoIntervalSec)
+    return i >= 0 ? root.autoLabels[i] : "Off"
+  }
 
   // Slug validation: theme names come from the remote index and are later
   // interpolated into `omarchy theme set <slug>` (which the shared bar runs
-  // through bash -lc). Only plain lowercase slugs with [a-z0-9._-] are allowed.
+  // through bash -lc). Only plain lowercase slugs with [a-z0-9._-] are
+  // allowed; '..' is rejected as a substring (mirrors _sec.safe_slug).
   function safeSlug(s) {
     s = String(s || "")
-    return /^[a-z0-9][a-z0-9._-]*$/.test(s) && s.length <= 256
+    return /^[a-z0-9][a-z0-9._-]*$/.test(s) && s.indexOf("..") === -1 && s.length <= 256
   }
 
   onOpenedChanged: {
@@ -417,29 +427,6 @@ Panel {
     stdout: StdioCollector { waitForEnd: true; onStreamFinished: function(text) { try { var j=JSON.parse(String(text||"{}")); if(j&&j.error) root.applyMsg=String(j.error) } catch(e) {} } }
     onExited: function(exitCode) {
       if (exitCode === 0) { root.applyPhase = 3; root.applyMsg = "\u2713 wallpaper set"; root.close() } else { root.applyPhase = 4; if(!root.applyMsg || root.applyMsg.startsWith("setting")) root.applyMsg = "wallpaper failed" }
-    }
-  }
-
-  // Kept for manual fallback; normal flow now uses detached exec
-  Process {
-    id: themeSetProc
-    running: false
-    stderr: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: function(text) {
-        var t = String(text || "").trim()
-        if (t) root.applyMsg = t
-      }
-    }
-    onExited: function(exitCode) {
-      if (exitCode === 0) {
-        root.applyPhase = 3
-        root.applyMsg = "\u2713 " + root.applySlug + " applied"
-        root.loadCurrentTheme()
-      } else {
-        root.applyPhase = 4
-        if (!root.applyMsg) root.applyMsg = "omarchy theme set failed"
-      }
     }
   }
 
@@ -619,7 +606,7 @@ Panel {
             }
             onTextChanged: root.setQuery(text)
             onAccepted: {
-              root.openDetailAt(0)
+              root.openDetailAt(root.cursorIdx)
               searchField.focus = false
               keyCatcher.forceActiveFocus()
             }
@@ -722,8 +709,8 @@ Panel {
                   model: root.autoLabels
                   delegate: Rectangle {
                     width: (autoBtns.width - 8)/5; height: 20; radius: 4
-                    color: root.autoLabels[index] === (root.autoIntervalSec===0 ? "Off" : root.autoIntervalSec===300 ? "5m" : root.autoIntervalSec===900 ? "15m" : root.autoIntervalSec===1800 ? "30m" : "60m") ? Style.selectedFill : Style.hoverFill
-                    Text { anchors.centerIn: parent; text: modelData; color: root.autoLabels[index] === (root.autoIntervalSec===0 ? "Off" : root.autoIntervalSec===300 ? "5m" : root.autoIntervalSec===900 ? "15m" : root.autoIntervalSec===1800 ? "30m" : "60m") ? root.fg : root.dim; font.family: root.mono; font.pointSize: 9 }
+                    color: root.autoLabels[index] === root.autoSelLabel() ? Style.selectedFill : Style.hoverFill
+                    Text { anchors.centerIn: parent; text: modelData; color: root.autoLabels[index] === root.autoSelLabel() ? root.fg : root.dim; font.family: root.mono; font.pointSize: 9 }
                     MouseArea {
                       id: autoBtnHover
                       anchors.fill: parent; hoverEnabled: true
@@ -741,7 +728,7 @@ Panel {
               }
             }
             Text {
-              text: root.autoIntervalSec>0 ? "every " + (root.autoIntervalSec>=3600 ? Math.floor(root.autoIntervalSec/60)+"m" : Math.floor(root.autoIntervalSec/60)+"m") : "off"
+              text: root.autoIntervalSec > 0 ? "every " + root.autoSelLabel() : "off"
               color: root.faint
               font.family: root.mono
               font.pointSize: Style.font.caption

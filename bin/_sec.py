@@ -32,7 +32,6 @@ MAX_PAL = 32
 MAX_THEMES_VARIANTS = 8
 MAX_STR = 1024
 MAX_PATH = 512
-MAX_UTF8_WALLPAPERS_JS = 128 << 20  # decoded JS string cap (raw is capped, this guards decode blowup)
 
 SAFE_REL_RE = re.compile(r"^[A-Za-z0-9_./+@=~-]+$")
 # Theme names double as slugs passed to `omarchy theme set` and later to
@@ -42,9 +41,14 @@ SAFE_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 
 
 def safe_slug(slug):
-    """True only for slugs safe to interpolate into a shell command."""
+    """True only for slugs safe to interpolate into a shell command.
+
+    '..' is rejected as a substring (not just as a path component): slugs
+    become directory names and later shell arguments, and a dot-dot run is
+    never a legitimate theme name.
+    """
     return (isinstance(slug, str) and bool(SAFE_SLUG_RE.match(slug))
-            and len(slug) <= 256)
+            and ".." not in slug and len(slug) <= 256)
 
 
 def fail(msg):
@@ -60,7 +64,12 @@ def fail_apply(msg):
 
 
 def is_allowed_url(url):
-    """True only for https URLs on the allowlisted media hosts."""
+    """True only for https URLs on the allowlisted media hosts.
+
+    Subdomains of an allowlisted host are intentionally accepted (e.g. a
+    future cdn.<media-host>); the suffix match is dot-anchored, so lookalike
+    domains such as <media-host>.evil.com are refused.
+    """
     if not isinstance(url, str) or not url or len(url) > 2048:
         return False
     try:
@@ -132,7 +141,7 @@ def sniff_image(data, what="media"):
         return "webp"
     if data[:6] in (b"GIF87a", b"GIF89a"):
         return "gif"
-    if data[:3] == b"AVI":
+    if data[4:8] == b"ftyp" and data[8:12] in (b"avif", b"avis"):
         return "avif"
     raise ValueError("%s is not a recognized image (magic %r)" % (what, data[:16]))
 

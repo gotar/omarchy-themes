@@ -1,6 +1,6 @@
 # Themes Gallery — gotar.omarchy-themes
 
-Center-bar gallery for **[bjarneo/omarchy-themes](https://bjarneo.github.io/omarchy-themes/)** — 3,088 wallpapers, each with five theme variants (Palette · Warm · Cool · Material · Aether).
+Center-bar gallery for **[bjarneo/omarchy-themes](https://bjarneo.github.io/omarchy-themes/)** — 3,000+ wallpapers, each with five theme variants (Palette · Warm · Cool · Material · Aether).
 
 Browse, search and preview like on the website, then apply any variant as a native Omarchy theme in one click. Lives in the center of the bar right after the weather widget (🖼️).
 

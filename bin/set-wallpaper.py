@@ -7,7 +7,8 @@ as the current background without changing the theme colors.
 Usage: set-wallpaper.py <base-url> <wallpaper-rel>
 Example: set-wallpaper.py https://wallpapers.hel1.your-objectstorage.com dark/green/6000x4000_...jpg
 
-Downloads to ~/.cache/gotar.omarchy-themes/wallpapers/<basename> and
+Downloads to ~/.cache/gotar.omarchy-themes/wallpapers/<wallpaper-rel> (path
+mirrored, so dark/a.jpg and light/a.jpg cannot collide) and
 then runs `omarchy-theme-bg-set <path>`. The cache avoids re-downloading.
 
 Exit: 0 on success (prints {"ok":true,"path":...}), 1 on failure.
@@ -41,9 +42,11 @@ def main():
         fail("unsafe wallpaper path: %r" % (rel,))
     url = base + "/" + rel
     cache_dir = os.path.expanduser("~/.cache/gotar.omarchy-themes/wallpapers")
-    os.makedirs(cache_dir, exist_ok=True)
-    name = os.path.basename(rel)
-    dest = os.path.join(cache_dir, name)
+    # Mirror the relative path tree: safe_relpath already guarantees no '..'
+    # components, and keying by basename alone would let dark/a.jpg and
+    # light/a.jpg collide.
+    dest = os.path.join(cache_dir, *rel.split("/"))
+    os.makedirs(os.path.dirname(dest), exist_ok=True)
 
     # Reuse the cache only if the entry exists and passes the image sniff;
     # anything invalid is re-downloaded (and then re-validated).
@@ -72,7 +75,9 @@ def main():
     try:
         res = subprocess.run(["omarchy-theme-bg-set", dest], capture_output=True, text=True, timeout=30)
         if res.returncode != 0:
-            # Fallback: direct symlink + shell IPC (like omarchy-theme-bg-set does)
+            # Fallback: direct symlink + shell IPC. NOTE: this mirrors the
+            # shell's internal state layout and IPC verb (same as
+            # omarchy-theme-bg-set does) — revisit if the shell changes them.
             link = os.path.expanduser("~/.local/state/omarchy/current/background")
             os.makedirs(os.path.dirname(link), exist_ok=True)
             try:

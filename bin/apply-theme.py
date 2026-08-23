@@ -74,18 +74,19 @@ def main():
     for rel in (ct, bg, fallback):
         if rel and not _sec.safe_relpath(rel):
             fail("unsafe path: %r" % (rel,))
+    if not ct:
+        fail("missing colors.toml path (required)")
 
     themes_root = os.path.expanduser("~/.config/omarchy/themes")
     dest = os.path.join(themes_root, slug)
-    if os.path.realpath(os.path.dirname(dest)) != os.path.realpath(themes_root):
-        fail("unsafe theme path")
+    # slug already passed safe_slug (no '/'), so dest is always directly
+    # inside themes_root — there is no path to traverse.
     os.makedirs(os.path.join(dest, "backgrounds"), exist_ok=True)
 
     # colors.toml — required
-    if ct:
-        ok, err = try_download(base, ct, dest, "colors.toml", "toml")
-        if not ok:
-            fail("colors.toml download failed: %s" % err)
+    ok, err = try_download(base, ct, dest, "colors.toml", "toml")
+    if not ok:
+        fail("colors.toml download failed: %s" % err)
 
     # background — try bg, then fallback (original wallpaper p)
     bg_ok = False
@@ -101,8 +102,8 @@ def main():
         if ok2:
             bg_ok = True
             bg_err = ""
-        elif not bg_ok:
-            bg_err = "%s; fallback %s" % (bg_err, err2) if bg_err else err2
+        else:
+            bg_err = err2 if not bg_err else "%s; fallback: %s" % (bg_err, err2)
 
     result = {"ok": True, "slug": slug, "path": dest}
     if not bg_ok and (bg or fallback):

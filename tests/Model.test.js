@@ -30,6 +30,12 @@ describe('Model.prep', () => {
     assert.ok(entries[0].hay.includes('green hill'));
     assert.ok(entries[0].hay.includes('hill'));
   });
+  it('prep tolerates missing tags', () => {
+    const entries = [{ p: 'a/x.jpg', t: 'X', tone: 'dark', color: 'red', w: 1920, h: 1080 }];
+    sandbox.prep(entries);
+    assert.equal(entries[0].tier, '1080p');
+    assert.ok(entries[0].hay.includes('a/x.jpg'));
+  });
 });
 
 describe('Model.apply', () => {
@@ -64,6 +70,14 @@ describe('Model.apply', () => {
     assert.equal(r.filtered.length, 2);
     r = sandbox.apply(entries, '', '', '', '', '1080p');
     assert.equal(r.filtered.length, 1);
+  });
+  it('live res facet counts respect the other facets', () => {
+    // tone=dark keeps a (4K) and c (5K); b (1080p, light) is excluded
+    const r = sandbox.apply(entries, '', 'dark', '', '', '');
+    assert.equal(r.facets.resMin['1080p'], 2); // 4K and 5K are >= 1080p
+    assert.equal(r.facets.resMin['8K+'] || 0, 0);
+    assert.equal(r.facets.resMax['4K'], 1);    // only a is <= 4K
+    assert.equal(r.facets.resMax['8K+'], 2);
   });
 });
 

@@ -16,4 +16,4 @@ jobs:
       - name: JS tests (Model)
         run: node --test tests/Model.test.js
       - name: Python tests (bin)
-        run: python3 -m unittest discover -s tests/python -v || true
+        run: python3 -m unittest discover -s tests/python -v

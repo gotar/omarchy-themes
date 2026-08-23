@@ -13,6 +13,7 @@ Failure prints {"error": "..."} to stdout.
 """
 import json
 import os
+import re
 import sys
 import tempfile
 import time
@@ -48,6 +49,106 @@ def load_cached_manifest():
         return None
 
 
+HEX6 = re.compile(r"#[0-9a-fA-F]{6}")
+
+
+def _as_str(v):
+    """String field: None -> "", non-string or over-long -> ValueError."""
+    if v is None:
+        return ""
+    if not isinstance(v, str):
+        raise ValueError("expected string, got %s" % type(v).__name__)
+    if len(v) > _sec.MAX_STR:
+        raise ValueError("string exceeds %d chars" % _sec.MAX_STR)
+    return v
+
+
+def _as_int(v):
+    """Dimension field: None/"" -> 0, non-numeric or negative -> ValueError."""
+    if v is None or v == "":
+        return 0
+    if isinstance(v, bool):
+        raise ValueError("bad dimension: %r" % (v,))
+    n = int(v)
+    if n < 0:
+        raise ValueError("negative dimension: %r" % (v,))
+    return n
+
+
+def _as_tags(v):
+    """Tags field: None -> [], non-list or non-string tag -> ValueError."""
+    if v is None:
+        return []
+    if not isinstance(v, list):
+        raise ValueError("tags must be a list")
+    out = []
+    for t in v:
+        if not isinstance(t, str) or len(t) > 128:
+            raise ValueError("tag must be a short string")
+        out.append(t)
+    return out
+
+
+def _as_pal(v):
+    """Palette field: None -> [], non-list -> ValueError, bad colors dropped."""
+    if v is None:
+        return []
+    if not isinstance(v, list):
+        raise ValueError("palette must be a list")
+    return [c for c in v if isinstance(c, str) and HEX6.fullmatch(c)][:_sec.MAX_PAL]
+
+
+def slim_entry(path, e):
+    """Slim one wallpapers.js record; None if the record is malformed.
+
+    The upstream file is third-party and occasionally odd, so malformed
+    records and variants are skipped instead of failing the whole index.
+    """
+    if not isinstance(e, dict):
+        return None
+    th_all = e.get("themes")
+    if not isinstance(th_all, dict):
+        th_all = {}
+    themes = {}
+    for v in VARIANTS:
+        t = th_all.get(v)
+        if not isinstance(t, dict):
+            continue
+        c = t.get("colors") or {}
+        if not isinstance(c, dict):
+            c = {}
+        try:
+            n = _as_str(t.get("name"))
+            ct = _as_str(t.get("colors_toml"))
+            bg = _as_str(t.get("background"))
+            colors = [_as_str(c.get(k)) for k in ANSI]
+        except ValueError:
+            continue  # drop one malformed variant, keep the rest
+        if n and not _sec.safe_slug(n):
+            continue  # name would break `omarchy theme set <slug>`
+        if ct and not _sec.safe_relpath(ct):
+            continue
+        if bg and not _sec.safe_relpath(bg):
+            continue
+        themes[v] = {"n": n, "ct": ct, "bg": bg, "c": colors}
+    try:
+        return {
+            "p": path,
+            "t": _as_str(e.get("title")) or path.rsplit("/", 1)[-1],
+            "tone": _as_str(e.get("tone")),
+            "color": _as_str(e.get("color")),
+            "tags": _as_tags(e.get("tags")),
+            "w": _as_int(e.get("width")),
+            "h": _as_int(e.get("height")),
+            "thumb": _as_str(e.get("thumb_path")),
+            "med": _as_str(e.get("medium_path")) or path,
+            "pal": _as_pal(e.get("colors")),
+            "th": themes,
+        }
+    except ValueError:
+        return None
+
+
 def main():
     force = "--force" in sys.argv[1:]
     now = int(time.time())
@@ -60,15 +161,9 @@ def main():
     os.makedirs(CACHE_DIR, exist_ok=True)
     if not _sec.is_allowed_url(SOURCE):
         fail("source URL not allowed")
-    raw = _sec.http_get(SOURCE, _sec.BYTE_LIMIT_RAW_JS)
-    if len(raw) > _sec.BYTE_LIMIT_RAW_JS:
-        fail("index exceeds byte ceiling")
-    try:
-        rawtext = raw.decode("utf-8", "replace")
-        if len(rawtext) > _sec.MAX_UTF8_WALLPAPERS_JS:
-            fail("index decoded size exceeds ceiling")
-    except Exception as ex:
-        fail("decode failed: %s" % ex)
+    raw = _sec.http_get(SOURCE, _sec.BYTE_LIMIT_RAW_JS)  # raises past the cap
+    # "replace" decoding cannot grow past the raw byte cap, so no extra cap.
+    rawtext = raw.decode("utf-8", "replace")
 
     base = ""
     marker = 'window.WALLPAPERS_BASE_URL = "'
@@ -94,35 +189,9 @@ def main():
     for path, e in data.items():
         if not isinstance(path, str) or not _sec.safe_relpath(path):
             continue  # skip malformed keys instead of failing the whole index
-        if not isinstance(e, dict):
-            continue
-        themes = {}
-        for v in VARIANTS:
-            t = (e.get("themes") or {}).get(v)
-            if not isinstance(t, dict):
-                continue
-            c = t.get("colors") or {}
-            if not isinstance(c, dict):
-                c = {}
-            themes[v] = {
-                "n": t.get("name", "") or "",
-                "ct": t.get("colors_toml", "") or "",
-                "bg": t.get("background", "") or "",
-                "c": [c.get(k, "") or "" for k in ANSI],
-            }
-        entries.append({
-            "p": path,
-            "t": e.get("title", "") or path.rsplit("/", 1)[-1],
-            "tone": e.get("tone", "") or "",
-            "color": e.get("color", "") or "",
-            "tags": e.get("tags", []) or [],
-            "w": int(e.get("width", 0) or 0),
-            "h": int(e.get("height", 0) or 0),
-            "thumb": e.get("thumb_path", "") or "",
-            "med": e.get("medium_path", "") or path,
-            "pal": e.get("colors", []) or [],
-            "th": themes,
-        })
+        entry = slim_entry(path, e)
+        if entry is not None:
+            entries.append(entry)
 
     out = {"base": base, "fetchedAt": now, "count": len(entries),
            "entries": entries}

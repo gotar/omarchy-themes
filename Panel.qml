@@ -486,7 +486,7 @@ Panel {
             width: 24
             height: 24
             anchors.right: parent.right
-            anchors.verticalCenter: true
+            anchors.verticalCenter: parent.verticalCenter
             Text {
               anchors.centerIn: parent
               text: "\u21BB"
@@ -506,7 +506,7 @@ Panel {
             height: 24
             anchors.right: shuffleBtn.left
             anchors.rightMargin: Style.spacing.xs
-            anchors.verticalCenter: true
+            anchors.verticalCenter: parent.verticalCenter
             Text {
               anchors.centerIn: parent
               text: "R"
@@ -885,9 +885,9 @@ Panel {
               Row {
                 width: parent.width
                 spacing: Style.spacing.xs
-                Text { text: root.autoIntervalSec>0 ? "every " + (root.autoIntervalSec>=3600 ? Math.floor(root.autoIntervalSec/60)+"m" : Math.floor(root.autoIntervalSec/60)+"m") : "off"; color: root.faint; font.family: root.mono; font.pointSize: Style.font.caption; anchors.verticalCenter: true }
+                Text { text: root.autoIntervalSec>0 ? "every " + (root.autoIntervalSec>=3600 ? Math.floor(root.autoIntervalSec/60)+"m" : Math.floor(root.autoIntervalSec/60)+"m") : "off"; color: root.faint; font.family: root.mono; font.pointSize: Style.font.caption; anchors.verticalCenter: parent.verticalCenter }
                 Item { width: 8; height: 1 }
-                Text { text: "↻ now"; color: root.dim; font.family: root.mono; font.pointSize: Style.font.caption; anchors.verticalCenter: true }
+                Text { text: "↻ now"; color: root.dim; font.family: root.mono; font.pointSize: Style.font.caption; anchors.verticalCenter: parent.verticalCenter }
                 MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.applyRandom() }
               }
             }

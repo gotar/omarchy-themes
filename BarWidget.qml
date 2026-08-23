@@ -50,6 +50,11 @@ BarWidget {
     horizontalMargin: 8.5
     onPressed: function(code) {
       if (code === Qt.LeftButton) root.toggle()
+      else if (code === Qt.RightButton) {
+        if (root.bar && root.bar.run) root.bar.run("aether")
+        else Quickshell.execDetached(["aether"])
+        root.close()
+      }
     }
   }
 }

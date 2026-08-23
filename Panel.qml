@@ -56,7 +56,9 @@ Panel {
   readonly property int gridCols: 4
 
   function scriptPath(name) {
-    return Qt.resolvedUrl("bin/" + name).replace(/^file:\/\//, "")
+    var u = String(Qt.resolvedUrl("bin/" + name))
+    if (u.startsWith("file://")) return u.substring(7)
+    return u
   }
   function baseOf() { return db ? String(db.base || "") : "" }
   function url(rel) { return baseOf() + "/" + String(rel || "").replace(/^\/+/, "") }
@@ -123,7 +125,7 @@ Panel {
     if (fetchProc.running && !force) return
     root.phase = 0
     root.phaseMsg = force ? "re-fetching index (35 MB)\u2026" : "loading index\u2026"
-    var sc="/home/gotar/.config/omarchy/plugins/gotar.omarchy-themes/bin/fetch-manifest.py"
+    var sc=root.scriptPath("fetch-manifest.py")
     fetchProc.command = ["/usr/bin/python3", sc].concat(force ? ["--force"] : [])
     fetchWatchdog.start()
     fetchProc.running = true
@@ -173,7 +175,7 @@ Panel {
       col = Math.max(0, col - 1)
     }
     root.cursorIdx = Math.max(0, Math.min(n - 1, row * cols + col))
-    gridView.ensureVisible(root.cursorIdx)
+    gridView.positionViewAtIndex(root.cursorIdx, GridView.Contain)
   }
 
   function openDetailAt(pos) {
@@ -224,8 +226,9 @@ Panel {
     root.applySlug = v.n
     root.applyPhase = 1
     root.applyMsg = "downloading " + v.n
-    applyProc.command = ["/usr/bin/python3", "/home/gotar/.config/omarchy/plugins/gotar.omarchy-themes/bin/apply-theme.py",
-                         v.n, root.baseOf(), v.ct, v.bg].slice()
+    var fallbackP = (root.db && root.detailIdx >= 0) ? root.db.entries[root.detailIdx].p : ""
+    applyProc.command = ["/usr/bin/python3", root.scriptPath("apply-theme.py"),
+                         v.n, root.baseOf(), v.ct, v.bg, fallbackP].slice()
     applyProc.running = true
   }
 
@@ -356,8 +359,8 @@ Panel {
     bar: root.bar
     open: root.opened
     focusTarget: keyCatcher
-    contentWidth: panel.fittedContentWidth(Style.space(780))
-    contentHeight: panel.fittedContentHeight(Style.space(560))
+    contentWidth: panel.fittedContentWidth(Style.space(900))
+    contentHeight: panel.fittedContentHeight(Style.space(640))
 
     PanelKeyCatcher {
       id: keyCatcher
@@ -477,21 +480,22 @@ Panel {
             placeholderText: "search themes, palettes, tags\u2026"
             placeholderTextColor: root.faint
             background: BorderSurface {
-              radius: 4
+              radius: 6
+              color: searchField.activeFocus ? Qt.alpha(Color.background, 0.55) : Qt.alpha(Color.background, 0.32)
               borderSpec: searchField.activeFocus
                 ? Border.flat(root.dim, 1)
-                : Border.flat(Color.background, 1)
+                : Border.flat(Qt.alpha(root.fg, 0.12), 1)
             }
             onTextChanged: root.setQuery(text)
             onAccepted: {
               root.openDetailAt(0)
-              searchField.activeFocus = false
+              searchField.focus = false
               keyCatcher.forceActiveFocus()
             }
             Keys.onEscapePressed: {
               searchField.text = ""
               root.setQuery("")
-              searchField.activeFocus = false
+              searchField.focus = false
               keyCatcher.forceActiveFocus()
             }
           }
@@ -835,7 +839,7 @@ Panel {
                   hoverEnabled: true
                   onEntered: {
                     root.cursorIdx = index
-                    gridView.ensureVisible(index)
+                    gridView.positionViewAtIndex(index, GridView.Contain)
                   }
                   onClicked: root.openDetailAt(index)
                 }
@@ -902,13 +906,25 @@ Panel {
               }
             }
           }
-          Item { width: 1 }
+          Item { width: root.crumbs.length ? 0 : 8 }
           Text {
+            visible: root.crumbs.length === 0
             text: "arrows move \u00b7 enter view \u00b7 / search \u00b7 x reset \u00b7 r refetch"
             color: root.faint
             font.family: root.mono
             font.pointSize: Style.font.caption
             anchors.verticalCenter: parent.verticalCenter
+            elide: Text.ElideRight
+            width: Math.max(0, statusRow.width - 220)
+          }
+          Item { width: 6 }
+          Text {
+            text: "bjarneo/omarchy-themes · MIT"
+            color: Qt.alpha(root.faint, 0.7)
+            font.family: root.mono
+            font.pointSize: Style.font.caption
+            anchors.verticalCenter: parent.verticalCenter
+            visible: statusRow.width > Style.space(500)
           }
         }
       }

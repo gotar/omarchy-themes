@@ -25,6 +25,30 @@ Alternative: clone to `~/.config/omarchy/plugins/gotar.omarchy-themes/` then `om
 
 Adds 🖼️ to the bar. Left-click opens the gallery, **right-click opens Aether**.
 
+## Requirements
+
+- **Omarchy** (shell with `omarchy` CLI — `omarchy plugin`, `omarchy theme`, `omarchy-shell` IPC)
+- **Python 3** (system `python3`, only stdlib — `urllib`, `json`, `subprocess`, `tempfile`)
+- **A Nerd Font** for the bar icon (🖼️ is a FontAwesome glyph, `JetBrainsMono Nerd Font` on Omarchy)
+
+No other runtime dependencies; the QML side uses only Quickshell + `qs.Commons`/`qs.Ui` shipped with the shell.
+
+## Uninstall
+
+```sh
+omarchy plugin remove gotar.omarchy-themes --yes
+omarchy-shell shell rescanPlugins
+```
+
+This disables the plugin, removes its bar widget and deletes `~/.config/omarchy/plugins/gotar.omarchy-themes/`. If the plugin was cloned manually instead, just remove the directory and rescan:
+
+```sh
+rm -rf ~/.config/omarchy/plugins/gotar.omarchy-themes
+omarchy-shell shell rescanPlugins
+```
+
+The applied themes (`~/.config/omarchy/themes/<slug>/`) are regular Omarchy user themes and stay installed — remove them with `omarchy theme remove <slug>` if you no longer want them. The wallpaper index cache in `~/.cache/gotar.omarchy-themes/` can be deleted (it is re-fetched on next open).
+
 ## Use
 
 | Mouse / Key | Action |

@@ -489,15 +489,21 @@ Panel {
             anchors.verticalCenter: parent.verticalCenter
             Text {
               anchors.centerIn: parent
-              text: "\u21BB"
+              text: "\uF049D"
               color: root.faint
               font.pointSize: Style.font.caption
               font.bold: true
             }
             MouseArea {
+              id: shuffleHover
               anchors.fill: parent
+              hoverEnabled: true
               cursorShape: Qt.PointingHandCursor
               onClicked: root.applyRandom()
+            }
+            PanelToolTip {
+              visible: shuffleHover.containsMouse
+              text: "Apply a random wallpaper / theme"
             }
           }
           Item {
@@ -515,9 +521,15 @@ Panel {
               font.bold: true
             }
             MouseArea {
+              id: refreshHover
               anchors.fill: parent
+              hoverEnabled: true
               cursorShape: Qt.PointingHandCursor
               onClicked: root.startLoad(true)
+            }
+            PanelToolTip {
+              visible: refreshHover.containsMouse
+              text: "Re-fetch the index (35 MB)"
             }
           }
           Item {
@@ -535,9 +547,15 @@ Panel {
               font.pointSize: Style.font.body
             }
             MouseArea {
+              id: resetHover
               anchors.fill: parent
+              hoverEnabled: true
               cursorShape: Qt.PointingHandCursor
               onClicked: root.resetFilters()
+            }
+            PanelToolTip {
+              visible: resetHover.containsMouse
+              text: "Reset all filters"
             }
           }
           Text {
@@ -588,21 +606,166 @@ Panel {
           }
         }
 
+        // ----------------------- mode / auto bar -------------------------
         Row {
-          id: bodyRow
+          id: modeRow
           anchors.left: parent.left
           anchors.leftMargin: Style.spacing.md
           anchors.right: parent.right
           anchors.rightMargin: Style.spacing.md
           anchors.top: headerRow.bottom
           anchors.topMargin: Style.spacing.md
+          height: 28
+          spacing: Style.space(32)
+
+          Row {
+            id: modeGroup
+            spacing: Style.spacing.md
+            anchors.verticalCenter: parent.verticalCenter
+            Text {
+              text: "MODE"
+              color: root.faint
+              font.family: root.mono
+              font.pointSize: Style.font.caption
+              font.bold: true
+              anchors.verticalCenter: parent.verticalCenter
+            }
+            Item {
+              id: modeBtns
+              width: Style.space(150)
+              height: 22
+              anchors.verticalCenter: parent.verticalCenter
+              Row {
+                width: parent.width
+                spacing: Style.spacing.xs
+                Rectangle {
+                  width: modeBtns.width/2 - 2; height: 22; radius: 4
+                  color: !root.wallpaperOnly ? Style.selectedFill : Style.hoverFill
+                  Text { anchors.centerIn: parent; text: "Theme"; color: !root.wallpaperOnly ? root.fg : root.dim; font.family: root.mono; font.pointSize: Style.font.caption }
+                  MouseArea {
+                    id: themeHover
+                    anchors.fill: parent; hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: root.wallpaperOnly = false
+                  }
+                  PanelToolTip {
+                    visible: themeHover.containsMouse
+                    text: "Theme mode: apply one-click theme variants"
+                  }
+                }
+                Rectangle {
+                  width: modeBtns.width/2 - 2; height: 22; radius: 4
+                  color: root.wallpaperOnly ? Style.selectedFill : Style.hoverFill
+                  Text { anchors.centerIn: parent; text: "Wallpaper"; color: root.wallpaperOnly ? root.fg : root.dim; font.family: root.mono; font.pointSize: Style.font.caption }
+                  MouseArea {
+                    id: wallpaperHover
+                    anchors.fill: parent; hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: root.wallpaperOnly = true
+                  }
+                  PanelToolTip {
+                    visible: wallpaperHover.containsMouse
+                    text: "Wallpaper mode: set the image directly"
+                  }
+                }
+              }
+            }
+          }
+
+          Row {
+            id: autoGroup
+            spacing: Style.spacing.md
+            anchors.verticalCenter: parent.verticalCenter
+            Text {
+              text: "AUTO"
+              color: root.faint
+              font.family: root.mono
+              font.pointSize: Style.font.caption
+              font.bold: true
+              anchors.verticalCenter: parent.verticalCenter
+            }
+            Item {
+              id: autoBtns
+              width: Style.space(135)
+              height: 20
+              anchors.verticalCenter: parent.verticalCenter
+              Row {
+                width: parent.width
+                spacing: 2
+                Repeater {
+                  model: root.autoLabels
+                  delegate: Rectangle {
+                    width: (autoBtns.width - 8)/5; height: 20; radius: 4
+                    color: root.autoLabels[index] === (root.autoIntervalSec===0 ? "Off" : root.autoIntervalSec===300 ? "5m" : root.autoIntervalSec===900 ? "15m" : root.autoIntervalSec===1800 ? "30m" : "60m") ? Style.selectedFill : Style.hoverFill
+                    Text { anchors.centerIn: parent; text: modelData; color: root.autoLabels[index] === (root.autoIntervalSec===0 ? "Off" : root.autoIntervalSec===300 ? "5m" : root.autoIntervalSec===900 ? "15m" : root.autoIntervalSec===1800 ? "30m" : "60m") ? root.fg : root.dim; font.family: root.mono; font.pointSize: 9 }
+                    MouseArea {
+                      id: autoBtnHover
+                      anchors.fill: parent; hoverEnabled: true
+                      cursorShape: Qt.PointingHandCursor
+                      onClicked: { var sec=root.autoOptions[index]; root.autoIntervalSec=sec }
+                    }
+                    PanelToolTip {
+                      visible: autoBtnHover.containsMouse
+                      text: root.autoOptions[index] === 0
+                        ? "Auto-random: off"
+                        : "Auto-apply a random wallpaper every " + root.autoLabels[index]
+                    }
+                  }
+                }
+              }
+            }
+            Text {
+              text: root.autoIntervalSec>0 ? "every " + (root.autoIntervalSec>=3600 ? Math.floor(root.autoIntervalSec/60)+"m" : Math.floor(root.autoIntervalSec/60)+"m") : "off"
+              color: root.faint
+              font.family: root.mono
+              font.pointSize: Style.font.caption
+              anchors.verticalCenter: parent.verticalCenter
+            }
+            Item {
+              id: nowBtn
+              width: nowText.implicitWidth + 6
+              height: 20
+              anchors.verticalCenter: parent.verticalCenter
+              Text {
+                id: nowText
+                text: "↻ now"
+                color: root.dim
+                font.family: root.mono
+                font.pointSize: Style.font.caption
+                anchors.left: parent.left
+                anchors.verticalCenter: parent.verticalCenter
+              }
+              MouseArea {
+                id: nowHover
+                anchors.fill: parent; hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: root.applyRandom()
+              }
+              PanelToolTip {
+                visible: nowHover.containsMouse
+                text: "Apply a random wallpaper now"
+              }
+            }
+          }
+        }
+
+        Item {
+          id: bodyRow
+          anchors.left: parent.left
+          anchors.leftMargin: Style.spacing.md
+          anchors.right: parent.right
+          anchors.rightMargin: Style.spacing.md
+          anchors.top: modeRow.bottom
+          anchors.topMargin: Style.spacing.md
           anchors.bottom: statusRow.top
           anchors.bottomMargin: Style.spacing.md
-          spacing: Style.spacing.lg
 
           // ----------------------- filter rail ---------------------------
           Column {
             id: filterCol
+            anchors.left: parent.left
+            anchors.top: parent.top
+            anchors.bottom: parent.bottom
             width: Style.space(150)
             spacing: Style.spacing.md
 
@@ -830,74 +993,15 @@ Panel {
               }
             }
           }
-            // ---- Wallpaper / Theme mode ----
-            Text {
-              text: "MODE"
-              color: root.faint
-              font.family: root.mono
-              font.pointSize: Style.font.caption
-              font.bold: true
-            }
-            Column {
-              width: filterCol.width
-              spacing: 2
-              Row {
-                width: parent.width
-                spacing: Style.spacing.xs
-                Rectangle {
-                  width: filterCol.width/2 -2; height: 22; radius: 4
-                  color: !root.wallpaperOnly ? Style.selectedFill : Style.hoverFill
-                  Text { anchors.centerIn: parent; text: "Theme"; color: !root.wallpaperOnly ? root.fg : root.dim; font.family: root.mono; font.pointSize: Style.font.caption }
-                  MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.wallpaperOnly = false }
-                }
-                Rectangle {
-                  width: filterCol.width/2 -2; height: 22; radius: 4
-                  color: root.wallpaperOnly ? Style.selectedFill : Style.hoverFill
-                  Text { anchors.centerIn: parent; text: "Wallpaper"; color: root.wallpaperOnly ? root.fg : root.dim; font.family: root.mono; font.pointSize: Style.font.caption }
-                  MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.wallpaperOnly = true }
-                }
-              }
-            }
-
-            Text {
-              text: "AUTO"
-              color: root.faint
-              font.family: root.mono
-              font.pointSize: Style.font.caption
-              font.bold: true
-            }
-            Column {
-              width: filterCol.width
-              spacing: 2
-              Row {
-                width: parent.width
-                spacing: 2
-                Repeater {
-                  model: root.autoLabels
-                  delegate: Rectangle {
-                    width: (filterCol.width - 8)/5; height: 20; radius: 4
-                    color: root.autoLabels[index] === (root.autoIntervalSec===0 ? "Off" : root.autoIntervalSec===300 ? "5m" : root.autoIntervalSec===900 ? "15m" : root.autoIntervalSec===1800 ? "30m" : "60m") ? Style.selectedFill : Style.hoverFill
-                    Text { anchors.centerIn: parent; text: modelData; color: root.autoLabels[index] === (root.autoIntervalSec===0 ? "Off" : root.autoIntervalSec===300 ? "5m" : root.autoIntervalSec===900 ? "15m" : root.autoIntervalSec===1800 ? "30m" : "60m") ? root.fg : root.dim; font.family: root.mono; font.pointSize: 9 }
-                    MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: { var sec=root.autoOptions[index]; root.autoIntervalSec=sec } }
-                  }
-                }
-              }
-              Row {
-                width: parent.width
-                spacing: Style.spacing.xs
-                Text { text: root.autoIntervalSec>0 ? "every " + (root.autoIntervalSec>=3600 ? Math.floor(root.autoIntervalSec/60)+"m" : Math.floor(root.autoIntervalSec/60)+"m") : "off"; color: root.faint; font.family: root.mono; font.pointSize: Style.font.caption; anchors.verticalCenter: parent.verticalCenter }
-                Item { width: 8; height: 1 }
-                Text { text: "↻ now"; color: root.dim; font.family: root.mono; font.pointSize: Style.font.caption; anchors.verticalCenter: parent.verticalCenter }
-                MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.applyRandom() }
-              }
-            }
-
 
           // ----------------------- wallpaper grid -------------------------
           Item {
             id: gridArea
-            width: bodyRow.width - filterCol.width - bodyRow.spacing
-            height: bodyRow.height
+            anchors.left: filterCol.right
+            anchors.leftMargin: Style.spacing.lg
+            anchors.right: parent.right
+            anchors.top: parent.top
+            anchors.bottom: parent.bottom
 
             Text {
               visible: root.filtered.length === 0
@@ -1296,7 +1400,7 @@ Panel {
             }
             Repeater {
               model: root.detailVariants
-              delegate: Row {
+              delegate: Item {
                 id: vrow
                 width: variantList.width
                 height: Style.space(30)

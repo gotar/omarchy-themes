@@ -489,7 +489,7 @@ Panel {
             anchors.verticalCenter: parent.verticalCenter
             Text {
               anchors.centerIn: parent
-              text: "\uF049D"
+              text: "\uF074"
               color: root.faint
               font.pointSize: Style.font.caption
               font.bold: true

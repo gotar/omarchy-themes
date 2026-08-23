@@ -41,6 +41,12 @@ Adds 🖼️ to the bar. Left-click opens the gallery, **right-click opens Aethe
 
 Hover + click everywhere: facets, cards, variant rows, breadcrumbs, search.
 
+### Random & Auto
+
+- **🔀 Shuffle** (header, next to `R`) or `Apply Random` in the `AUTO` filter section — picks a random wallpaper from the *currently filtered* set and applies it (variant + wallpaper in Theme mode, only wallpaper in Wallpaper mode).
+- **AUTO** — filter rail `AUTO` lets you pick `Off · 5m · 15m · 30m · 60m`. When on, a `Timer` fires every interval and calls the same random logic, even while the gallery is closed (the `Panel` root stays loaded via the bar widget). Great for a live wallpaper rotation that respects your tone/color/resolution filters. Set `AUTO 15m` + `dark + green + ≥5K` and you get a fresh dark-green 5K wallpaper every quarter hour.
+- **Wallpaper only** — filter rail `MODE` toggle `Theme ↔ Wallpaper`. In `Wallpaper` mode `Apply` (and random) only sets the image via `bin/set-wallpaper.py` + `omarchy-theme-bg-set` without touching `colors.toml`/theme — ideal if you love your current theme colors and just want the image.
+
 ## How it works
 
 - **Index**: first open runs `bin/fetch-manifest.py` → downloads ~35 MB `https://bjarneo.github.io/omarchy-themes/wallpapers.js` (`window.WALLPAPERS` + `WALLPAPERS_BASE_URL`), slims to ~7 MB JSON (`p/t/tone/color/tags/w/h/thumb/med/pal/th{5×{n,ct,bg,c[16]}}`) and caches to `~/.cache/gotar.omarchy-themes/manifest.json` (24 h TTL). Subsequent opens read cache instantly.
@@ -53,11 +59,12 @@ No extra network beyond index + media.
 
 ```
 manifest.json          id gotar.omarchy-themes, kind bar-widget, on-demand, center
-BarWidget.qml          🖼️ JetBrainsMono Nerd Font button, left=toggle, right=Aether
-Panel.qml              900×640 KeyboardPanel + PanelKeyCatcher, search (dark translucent), filter rail, GridView, detail, IpcHandler toggle/close/open
+BarWidget.qml          🖼️ JetBrainsMono Nerd Font button, left=toggle, right=Aether, header 🔀 random
+Panel.qml              900×640 KeyboardPanel + PanelKeyCatcher, search (dark translucent), filter rail (TONE/COLOR/RESOLUTION + MODE Theme/Wallpaper + AUTO Off/5/15/30/60), GridView, detail, IpcHandler, auto Timer, wallpaperProc
 Model.js               .pragma library — bucketRes, prep, apply, variant helpers, titleCase
 bin/fetch-manifest.py  wallpapers.js → slim manifest → cache
-bin/apply-theme.py     colors + background (with fallback) → theme
+bin/apply-theme.py     colors + background (with fallback med→p) → theme (detached, panel closes first to avoid Hyprland freeze)
+bin/set-wallpaper.py   wallpaper only → cache → omarchy-theme-bg-set
 ```
 
 Window is `fittedContentWidth(900)` × `fittedContentHeight(640)` so the 4-column grid and detail (½ image + palette/tags + 5 ramps) breathe. Search field is dark translucent (`Qt.alpha(Color.background,0.32)` → `0.55` on focus) with subtle border.

@@ -50,6 +50,11 @@ Panel {
 
   readonly property bool hasActiveFilters:
     q !== "" || tone !== "" || color !== "" || resMin !== "" || resMax !== ""
+  // ---- auto random + wallpaper-only
+  property bool wallpaperOnly: false
+  property int autoIntervalSec: 0 // 0=Off, 300=5m, 900=15m, 1800=30m, 3600=60m
+  readonly property var autoOptions: [0, 300, 900, 1800, 3600]
+  readonly property var autoLabels: ["Off", "5m", "15m", "30m", "60m"]
   readonly property string modeLabel:
     applyPhase > 0 ? "APPLY" :
     detailPath !== "" ? "VIEW" : "BROWSE"
@@ -228,10 +233,49 @@ Panel {
     root.applyMsg = "downloading " + v.n
     var e = (root.db && root.detailIdx >= 0) ? root.db.entries[root.detailIdx] : null
     var fallbackP = e ? (e.med || e.p || "") : ""
+    // wallpaper-only: set image directly, no theme
+    if (root.wallpaperOnly) {
+      var rel = e ? (e.med || e.p || v.bg || "") : (v.bg || "")
+      if (!rel) { root.applyPhase = 4; root.applyMsg = "missing wallpaper"; return }
+      root.applySlug = v.n
+      root.applyPhase = 1
+      root.applyMsg = "setting wallpaper…"
+      wallpaperProc.command = ["/usr/bin/python3", root.scriptPath("set-wallpaper.py"), root.baseOf(), rel]
+      wallpaperProc.running = true
+      return
+    }
     applyProc.command = ["/usr/bin/python3", root.scriptPath("apply-theme.py"),
                          v.n, root.baseOf(), v.ct, v.bg, fallbackP].slice()
     applyProc.running = true
   }
+
+  function applyRandom() {
+    if (!db || !filtered.length) return
+    var pos = Math.floor(Math.random() * filtered.length)
+    var full = filtered[pos]
+    var e = db.entries[full]
+    if (wallpaperOnly) {
+      var rel = e.med || e.p
+      if (!rel) return
+      // show in detail briefly then apply
+      detailIdx = full; detailPath = e.p; detailVariants = Model.variantsOf(e); detailVariant = 0
+      applyWallpaper(rel)
+    } else {
+      var vs = Model.variantsOf(e)
+      if (!vs.length) return
+      var v = vs[Math.floor(Math.random() * vs.length)]
+      detailIdx = full; detailPath = e.p; detailVariants = vs; detailVariant = vs.indexOf(v)
+      applySelected()
+    }
+  }
+  function applyWallpaper(rel) {
+    if (!rel || !baseOf()) return
+    if (wallpaperProc.running) return
+    applyPhase = 1; applyMsg = "setting wallpaper…"
+    wallpaperProc.command = ["/usr/bin/python3", root.scriptPath("set-wallpaper.py"), baseOf(), rel]
+    wallpaperProc.running = true
+  }
+  function setAutoInterval(sec) { autoIntervalSec = sec }
 
   function switchPanel(direction) {
     if (root.bar && typeof root.bar.switchPanelFrom === "function")
@@ -294,6 +338,13 @@ Panel {
     repeat: false
     onTriggered: root.refreshFilters()
   }
+  Timer {
+    id: autoTimer
+    interval: root.autoIntervalSec * 1000
+    repeat: true
+    running: root.autoIntervalSec > 0 && root.db !== null && root.filtered.length > 0
+    onTriggered: root.applyRandom()
+  }
 
   Process {
     id: themeCurProc
@@ -332,6 +383,14 @@ Panel {
         root.applyPhase = 4
         if (!root.applyMsg || root.applyMsg.startsWith("downloading")) root.applyMsg = "install failed" + (root.applyMsg ? ": " + root.applyMsg : "")
       }
+    }
+  }
+  Process {
+    id: wallpaperProc
+    running: false
+    stdout: StdioCollector { waitForEnd: true; onStreamFinished: function(text) { try { var j=JSON.parse(String(text||"{}")); if(j&&j.error) root.applyMsg=String(j.error) } catch(e) {} } }
+    onExited: function(exitCode) {
+      if (exitCode === 0) { root.applyPhase = 3; root.applyMsg = "\u2713 wallpaper set"; root.close() } else { root.applyPhase = 4; if(!root.applyMsg || root.applyMsg.startsWith("setting")) root.applyMsg = "wallpaper failed" }
     }
   }
 
@@ -423,11 +482,31 @@ Panel {
             anchors.verticalCenter: parent.verticalCenter
           }
           Item {
-            id: refreshBtn
+            id: shuffleBtn
             width: 24
             height: 24
             anchors.right: parent.right
-            anchors.verticalCenter: parent.verticalCenter
+            anchors.verticalCenter: true
+            Text {
+              anchors.centerIn: parent
+              text: "\u21BB"
+              color: root.faint
+              font.pointSize: Style.font.caption
+              font.bold: true
+            }
+            MouseArea {
+              anchors.fill: parent
+              cursorShape: Qt.PointingHandCursor
+              onClicked: root.applyRandom()
+            }
+          }
+          Item {
+            id: refreshBtn
+            width: 24
+            height: 24
+            anchors.right: shuffleBtn.left
+            anchors.rightMargin: Style.spacing.xs
+            anchors.verticalCenter: true
             Text {
               anchors.centerIn: parent
               text: "R"
@@ -751,6 +830,68 @@ Panel {
               }
             }
           }
+            // ---- Wallpaper / Theme mode ----
+            Text {
+              text: "MODE"
+              color: root.faint
+              font.family: root.mono
+              font.pointSize: Style.font.caption
+              font.bold: true
+            }
+            Column {
+              width: filterCol.width
+              spacing: 2
+              Row {
+                width: parent.width
+                spacing: Style.spacing.xs
+                Rectangle {
+                  width: filterCol.width/2 -2; height: 22; radius: 4
+                  color: !root.wallpaperOnly ? Style.selectedFill : Style.hoverFill
+                  Text { anchors.centerIn: parent; text: "Theme"; color: !root.wallpaperOnly ? root.fg : root.dim; font.family: root.mono; font.pointSize: Style.font.caption }
+                  MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.wallpaperOnly = false }
+                }
+                Rectangle {
+                  width: filterCol.width/2 -2; height: 22; radius: 4
+                  color: root.wallpaperOnly ? Style.selectedFill : Style.hoverFill
+                  Text { anchors.centerIn: parent; text: "Wallpaper"; color: root.wallpaperOnly ? root.fg : root.dim; font.family: root.mono; font.pointSize: Style.font.caption }
+                  MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.wallpaperOnly = true }
+                }
+              }
+            }
+
+            Text {
+              text: "AUTO"
+              color: root.faint
+              font.family: root.mono
+              font.pointSize: Style.font.caption
+              font.bold: true
+            }
+            Column {
+              width: filterCol.width
+              spacing: 2
+              Row {
+                width: parent.width
+                spacing: 2
+                Repeater {
+                  model: root.autoLabels
+                  delegate: Rectangle {
+                    width: (filterCol.width - 8)/5; height: 20; radius: 4
+                    color: root.autoLabels[index] === (root.autoIntervalSec===0 ? "Off" : root.autoIntervalSec===300 ? "5m" : root.autoIntervalSec===900 ? "15m" : root.autoIntervalSec===1800 ? "30m" : "60m") ? Style.selectedFill : Style.hoverFill
+                    Text { anchors.centerIn: parent; text: modelData; color: root.autoLabels[index] === (root.autoIntervalSec===0 ? "Off" : root.autoIntervalSec===300 ? "5m" : root.autoIntervalSec===900 ? "15m" : root.autoIntervalSec===1800 ? "30m" : "60m") ? root.fg : root.dim; font.family: root.mono; font.pointSize: 9 }
+                    MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: { var sec=root.autoOptions[index]; root.autoIntervalSec=sec } }
+                  }
+                }
+              }
+              Row {
+                width: parent.width
+                spacing: Style.spacing.xs
+                Text { text: root.autoIntervalSec>0 ? "every " + (root.autoIntervalSec>=3600 ? Math.floor(root.autoIntervalSec/60)+"m" : Math.floor(root.autoIntervalSec/60)+"m") : "off"; color: root.faint; font.family: root.mono; font.pointSize: Style.font.caption; anchors.verticalCenter: true }
+                Item { width: 8; height: 1 }
+                Text { text: "↻ now"; color: root.dim; font.family: root.mono; font.pointSize: Style.font.caption; anchors.verticalCenter: true }
+                MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.applyRandom() }
+              }
+            }
+
 
           // ----------------------- wallpaper grid -------------------------
           Item {
@@ -917,22 +1058,22 @@ Panel {
           Item { width: root.crumbs.length ? 0 : 8 }
           Text {
             visible: root.crumbs.length === 0
-            text: "arrows move \u00b7 enter view \u00b7 / search \u00b7 x reset \u00b7 r refetch"
+            text: "arrows \u00b7 enter \u00b7 / \u00b7 x \u00b7 r"
             color: root.faint
             font.family: root.mono
             font.pointSize: Style.font.caption
             anchors.verticalCenter: parent.verticalCenter
             elide: Text.ElideRight
-            width: Math.max(0, statusRow.width - 220)
+            width: Math.max(0, Math.min(Style.space(160), statusRow.width - 260))
           }
           Item { width: 6 }
           Text {
-            text: "bjarneo/omarchy-themes · MIT"
-            color: Qt.alpha(root.faint, 0.7)
+            text: "bjarneo · MIT"
+            color: Qt.alpha(root.faint, 0.6)
             font.family: root.mono
             font.pointSize: Style.font.caption
             anchors.verticalCenter: parent.verticalCenter
-            visible: statusRow.width > Style.space(500)
+            visible: statusRow.width > Style.space(580)
           }
         }
       }

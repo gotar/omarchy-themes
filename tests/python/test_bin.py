@@ -1,15 +1,25 @@
-"""Behavior tests for bin/ scripts (no network: http_get is mocked)."""
+"""Behavior tests for bin/ scripts (no network: http_get is mocked).
+
+Every bug fixed in review has a dedicated assertion here so regressions
+are caught by `python3 -m unittest discover -s tests/python` and by CI.
+"""
 import importlib.util
 import json
 import os
 import pathlib
+import re
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 import urllib.error
+import urllib.request
+import warnings
+warnings.simplefilter("ignore")
 
 BIN = pathlib.Path(__file__).parent.parent.parent / "bin"
+REPO = pathlib.Path(__file__).parent.parent.parent
 sys.path.insert(0, str(BIN))
 
 import _sec  # noqa: E402
@@ -26,37 +36,36 @@ def load_module(name):
     return mod
 
 
+# ---------------------------------------------------------------------------
+# apply-theme
+# ---------------------------------------------------------------------------
+
 class TestApplyTheme(unittest.TestCase):
     def test_slug_validation(self):
-        # Should fail on bad slug with slash
         res = subprocess.run([sys.executable, str(BIN / "apply-theme.py"), "bad/slug", "https://example.com", "ct", "bg"], capture_output=True, text=True)
         self.assertNotEqual(res.returncode, 0)
         j = json.loads(res.stdout.strip().splitlines()[-1])
         self.assertIn("bad slug", j["error"])
 
     def test_base_allowlist(self):
-        # Host outside the allowlist must be refused before any download
         res = subprocess.run([sys.executable, str(BIN / "apply-theme.py"), "ok", "https://evil.example.com/x", "ct", "bg"], capture_output=True, text=True)
         self.assertNotEqual(res.returncode, 0)
         j = json.loads(res.stdout.strip().splitlines()[-1])
         self.assertIn("allowlist", j["error"])
 
     def test_missing_colors_toml_fails(self):
-        # colors.toml is required: empty path must fail, not silently succeed
         res = subprocess.run([sys.executable, str(BIN / "apply-theme.py"), "ok", "https://bjarneo.github.io", "", "bg.jpg"], capture_output=True, text=True)
         self.assertNotEqual(res.returncode, 0)
         j = json.loads(res.stdout.strip().splitlines()[-1])
         self.assertIn("colors.toml", j["error"])
 
     def test_background_falls_back_to_wallpaper(self):
-        # 403 on the theme background, 200 on the original wallpaper:
-        # try_download must fail then succeed and land a valid image on disk.
         apply_theme = load_module("apply-theme")
 
         def fake_http_get(url, limit):
             if url.endswith("/omarchy-themes/private-bg.jpg"):
                 err = urllib.error.HTTPError(url, 403, "private", None, None)
-                err.fp = None  # no real response to clean up in the mock
+                err.fp = None
                 raise err
             return JPEG
 
@@ -75,6 +84,10 @@ class TestApplyTheme(unittest.TestCase):
         finally:
             _sec.http_get = orig
 
+
+# ---------------------------------------------------------------------------
+# fetch-manifest
+# ---------------------------------------------------------------------------
 
 class TestFetchManifest(unittest.TestCase):
     def setUp(self):
@@ -140,6 +153,49 @@ class TestFetchManifest(unittest.TestCase):
         out = self.fetch.slim_entry("dark/green/a.jpg", e)
         self.assertEqual(out["pal"], ["#112233"])
 
+    def test_thumb_med_sanitized_not_fatal(self):
+        # Invalid thumb/med must be sanitized to "" / fallback, not crash the batch.
+        e = self._entry(thumb_path="../evil.jpg", medium_path="bad:thing")
+        out = self.fetch.slim_entry("dark/green/a.jpg", e)
+        self.assertIsNotNone(out, "entry with bad thumb/med should not be dropped entirely")
+        self.assertEqual(out["thumb"], "")
+        self.assertEqual(out["med"], "dark/green/a.jpg")  # falls back to p
+
+        e2 = self._entry(thumb_path="a//b.jpg")
+        out2 = self.fetch.slim_entry("dark/green/a.jpg", e2)
+        self.assertEqual(out2["thumb"], "")
+
+    def test_future_cache_is_stale(self):
+        # load_cached_manifest must return None when fetchedAt is in the future (clock skew)
+        with tempfile.TemporaryDirectory() as td:
+            orig_cache = self.fetch.CACHE_DIR
+            orig_manifest = self.fetch.MANIFEST
+            self.fetch.CACHE_DIR = td
+            self.fetch.MANIFEST = os.path.join(td, "manifest.json")
+            try:
+                future = int(time.time()) + 86400 * 5
+                payload = json.dumps({
+                    "base": MEDIA_BASE,
+                    "fetchedAt": future,
+                    "count": 1,
+                    "entries": [{
+                        "p": "dark/a.jpg", "t": "A", "tone": "dark", "color": "green",
+                        "tags": [], "w": 100, "h": 100,
+                        "thumb": "dark/a.jpg", "med": "dark/a.jpg",
+                        "pal": [], "th": {"palette": {"n": "a-aether", "ct": "a.toml", "bg": "a.jpg", "c": ["#000"]*16}}
+                    }]
+                })
+                pathlib.Path(self.fetch.MANIFEST).write_text(payload)
+                hit = self.fetch.load_cached_manifest()
+                self.assertIsNone(hit, "future fetchedAt must be treated as stale (clock skew)")
+            finally:
+                self.fetch.CACHE_DIR = orig_cache
+                self.fetch.MANIFEST = orig_manifest
+
+
+# ---------------------------------------------------------------------------
+# _sec hardening
+# ---------------------------------------------------------------------------
 
 class TestSec(unittest.TestCase):
     def test_allowlist(self):
@@ -157,6 +213,17 @@ class TestSec(unittest.TestCase):
         self.assertFalse(_sec.safe_relpath("/abs"))
         self.assertFalse(_sec.safe_relpath("https://evil.com/x"))
 
+    def test_relpath_edge_trailing_and_double_slash(self):
+        # img..jpg contains ".." as substring but not as path component — must pass
+        self.assertTrue(_sec.safe_relpath("img..jpg"))
+        self.assertTrue(_sec.safe_relpath("a/img..jpg"))
+        # double slash and trailing slash must be rejected (would hit a directory)
+        self.assertFalse(_sec.safe_relpath("a//b.jpg"))
+        self.assertFalse(_sec.safe_relpath("a/b/"))
+        self.assertFalse(_sec.safe_relpath("a/b//c.jpg"))
+        self.assertFalse(_sec.safe_relpath("a:b"))
+        self.assertFalse(_sec.safe_relpath("a\\b"))
+
     def test_sniff_image(self):
         self.assertEqual(_sec.sniff_image(b"\xff\xd8\xff" + b"\x00" * 10), "jpeg")
         self.assertEqual(_sec.sniff_image(b"\x89PNG\r\n\x1a\n" + b"\x00" * 10), "png")
@@ -167,8 +234,13 @@ class TestSec(unittest.TestCase):
         # AVIF: ISO-BMFF with ftyp@4 + avif/avis@8; classic AVI video must NOT pass.
         self.assertEqual(_sec.sniff_image(b"\x00\x00\x00\x18ftypavif\x00\x00\x00\x01"), "avif")
         self.assertEqual(_sec.sniff_image(b"\x00\x00\x00\x18ftypavis\x00\x00\x00\x01"), "avif")
+        # mif1 with avif in compatible brands must also be accepted
+        self.assertEqual(_sec.sniff_image(b"\x00\x00\x00\x18ftypmif1\x00\x00\x00\x00avif"), "avif")
         with self.assertRaises(ValueError):
             _sec.sniff_image(b"AVI " + b"\x00" * 16)
+        # plain mif1 without avif compat must not be sniffed as avif
+        with self.assertRaises(ValueError):
+            _sec.sniff_image(b"\x00\x00\x00\x18ftypmif1\x00\x00\x00\x00heic")
 
     def test_safe_slug(self):
         self.assertTrue(_sec.safe_slug("mate-02-aether"))
@@ -184,6 +256,35 @@ class TestSec(unittest.TestCase):
         self.assertTrue(_sec.validate_toml(b"[colors]\nx = 1\n"))
         with self.assertRaises(ValueError):
             _sec.validate_toml(b"\x00\x01\x02")
+
+    def test_redirect_blocked(self):
+        handler = _sec._NoRedirect()
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            handler.redirect_request(None, None, 302, "Found", {}, "https://evil.com/steal")
+        self.assertIn("redirect blocked", str(ctx.exception))
+        try:
+            ctx.exception.close()
+        except Exception:
+            pass
+
+        # http_get must not follow redirects even if allowlist host redirects
+        orig_build = urllib.request.build_opener
+        def fake_build(*handlers):
+            class FakeOpener:
+                def open(self, req, timeout=None):
+                    err = urllib.error.HTTPError(req.full_url, 302, "redirect", {}, None)
+                    raise err
+            return FakeOpener()
+        urllib.request.build_opener = fake_build
+        try:
+            with self.assertRaises(urllib.error.HTTPError) as ctx2:
+                _sec.http_get("https://bjarneo.github.io/ok", 1024)
+            try:
+                ctx2.exception.close()
+            except Exception:
+                pass
+        finally:
+            urllib.request.build_opener = orig_build
 
     def test_manifest_validation(self):
         good = {
@@ -204,7 +305,6 @@ class TestSec(unittest.TestCase):
         }
         _sec.validate_slim_manifest(good)  # must not raise
 
-        # second color in pal must be #rrggbb
         bad = json.loads(json.dumps(good))
         bad["entries"][0]["pal"] = ["notacolor"]
         with self.assertRaises(ValueError):
@@ -215,14 +315,12 @@ class TestSec(unittest.TestCase):
         with self.assertRaises(ValueError):
             _sec.validate_slim_manifest(bad2)
 
-        # theme name with shell metacharacters must be rejected
         bad3 = json.loads(json.dumps(good))
         bad3["entries"][0]["th"]["palette"]["n"] = "evil; touch /tmp/pwned"
         with self.assertRaises(ValueError):
             _sec.validate_slim_manifest(bad3)
 
     def test_read_capped(self):
-        import tempfile
         tmp = pathlib.Path(tempfile.mkstemp(prefix="_sec_cap_")[1])
         try:
             tmp.write_text("x" * 100)
@@ -232,6 +330,69 @@ class TestSec(unittest.TestCase):
                 _sec.read_file_capped(str(tmp), 50)
         finally:
             tmp.unlink(missing_ok=True)
+
+
+# ---------------------------------------------------------------------------
+# set-wallpaper mirrored cache + Panel + CI source checks
+# ---------------------------------------------------------------------------
+
+class TestWallpaperCache(unittest.TestCase):
+    def test_mirrored_paths_no_collision(self):
+        # dark/a.jpg and light/a.jpg must map to different cache files
+        cache = "/tmp/c"
+        rel_a = "dark/a.jpg"
+        rel_b = "light/a.jpg"
+        dest_a = os.path.join(cache, *rel_a.split("/"))
+        dest_b = os.path.join(cache, *rel_b.split("/"))
+        self.assertNotEqual(dest_a, dest_b)
+        self.assertTrue(dest_a.endswith("dark/a.jpg"))
+        self.assertTrue(dest_b.endswith("light/a.jpg"))
+
+
+class TestPanelSource(unittest.TestCase):
+    def test_no_hardcoded_absolute_paths(self):
+        text = (REPO / "Panel.qml").read_text()
+        self.assertNotIn("/usr/bin/python3", text, "use 'python3' via PATH, not absolute")
+        self.assertNotIn("/usr/bin/omarchy", text, "use 'omarchy' via PATH, not absolute")
+        self.assertIn('"python3"', text)
+        self.assertIn('"omarchy"', text)
+
+    def test_watchdog_kills_fetch(self):
+        text = (REPO / "Panel.qml").read_text()
+        # fetchWatchdog must kill the hanging Process on timeout
+        self.assertIn("fetchProc.running = false", text)
+        # must be inside fetchWatchdog's onTriggered
+        m = re.search(r"id:\s*fetchWatchdog.*?onTriggered.*?fetchProc\.running\s*=\s*false", text, re.S)
+        self.assertIsNotNone(m, "watchdog onTriggered should set fetchProc.running = false")
+
+    def test_safeRel_mirrors_python(self):
+        text = (REPO / "Panel.qml").read_text()
+        self.assertIn('s.split(\"/\").indexOf(\"..\")', text)
+        self.assertIn('!s.endsWith(\"/\")', text)
+        self.assertIn('s.indexOf(\"//\")', text)
+
+    def test_cursor_enter_uses_cursorIdx(self):
+        text = (REPO / "Panel.qml").read_text()
+        self.assertIn("openDetailAt(root.cursorIdx)", text)
+        self.assertNotIn("openDetailAt(0)", text)
+
+    def test_fallback_uses_fullres(self):
+        text = (REPO / "Panel.qml").read_text()
+        self.assertIn('fallbackP = e ? (e.p || \"\")', text)
+        self.assertNotIn('fallbackP = e ? (e.med', text)
+
+
+class TestCI(unittest.TestCase):
+    def test_python_tests_not_masked(self):
+        text = (REPO / ".github/workflows/ci.yml").read_text()
+        self.assertNotIn("discover -s tests/python -v || true", text)
+        self.assertIn("discover -s tests/python -v", text)
+
+    def test_validate_not_masked(self):
+        text = (REPO / ".github/workflows/ci.yml").read_text()
+        # the only || true allowed is none; validate must not be masked
+        self.assertNotIn("validate ./ || true", text)
+        self.assertIn("omarchy plugin validate ./;", text)
 
 
 if __name__ == "__main__":

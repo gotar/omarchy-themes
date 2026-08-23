@@ -92,15 +92,32 @@ def safe_relpath(rel):
         return False
     if rel.startswith(("/", "\\")) or ".." in rel.split("/") or ":" in rel:
         return False
+    if rel.endswith("/") or "//" in rel:
+        return False
     return bool(SAFE_REL_RE.match(rel))
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Block redirects — the allowlist is checked only on the initial URL."""
+    def redirect_request(self, req, fp, code, msg, hdrs, newurl):
+        raise urllib.error.HTTPError(newurl, code, "redirect blocked: %r" % newurl[:120], hdrs, fp)
+
+
 def http_get(url, max_bytes):
-    """Streaming https GET with a hard byte ceiling and host allowlist."""
+    """Streaming https GET with a hard byte ceiling and host allowlist.
+
+    Redirects are blocked: an attacker controlling the initial host must not
+    be able to bounce the fetch to an internal/sensitive URL via 302.
+    """
     if not is_allowed_url(url):
         raise ValueError("URL not on allowlist: %r" % url[:120])
     req = urllib.request.Request(url, headers=UA)
-    with urllib.request.urlopen(req, timeout=120) as resp:
+    opener = urllib.request.build_opener(_NoRedirect())
+    with opener.open(req, timeout=120) as resp:
+        # Defense-in-depth: if a redirect slipped through, re-validate.
+        final = getattr(resp, "url", url)
+        if final != url and not is_allowed_url(final):
+            raise ValueError("redirect target not on allowlist: %r" % final[:120])
         total = 0
         out = bytearray()
         while True:
@@ -141,8 +158,13 @@ def sniff_image(data, what="media"):
         return "webp"
     if data[:6] in (b"GIF87a", b"GIF89a"):
         return "gif"
-    if data[4:8] == b"ftyp" and data[8:12] in (b"avif", b"avis"):
-        return "avif"
+    if data[4:8] == b"ftyp":
+        # Major brand avif/avis, or mif1 with avif/avis in compatible brands.
+        major = data[8:12]
+        if major in (b"avif", b"avis"):
+            return "avif"
+        if major == b"mif1" and (b"avif" in data[8:24] or b"avis" in data[8:24]):
+            return "avif"
     raise ValueError("%s is not a recognized image (magic %r)" % (what, data[:16]))
 
 

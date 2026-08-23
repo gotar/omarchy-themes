@@ -29,15 +29,17 @@ const VARIANT_HUE = {
   aether: "#a87cd9"
 }
 
-// Same bucketing as the site (by width).
+// Same bucketing as the site, but on max dimension so portrait 2160×3840
+// correctly lands in 4K instead of 1080p.
 function bucketRes(w, h) {
   if (!w || !h) return null
-  if (w >= 7000) return "8K+"
-  if (w >= 4800) return "5K"
-  if (w >= 3500) return "4K"
-  if (w >= 2500) return "1440p"
-  if (w >= 1900) return "1080p"
-  if (w >= 1200) return "720p"
+  var m = Math.max(w, h)
+  if (m >= 7000) return "8K+"
+  if (m >= 4800) return "5K"
+  if (m >= 3500) return "4K"
+  if (m >= 2500) return "1440p"
+  if (m >= 1900) return "1080p"
+  if (m >= 1200) return "720p"
   return "<=720p"
 }
 

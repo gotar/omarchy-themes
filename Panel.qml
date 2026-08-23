@@ -71,11 +71,12 @@ Panel {
   // path — anything else yields "" so Image/Process never see it.
   function safeRel(rel) {
     // Mirrors _sec.safe_relpath: '..' is rejected as a path component, not a
-    // substring, so file names like "img..jpg" still load.
+    // substring, so file names like "img..jpg" still load. Trailing slash
+    // and "//" are also rejected (would make Image/Process hit a directory).
     var s = String(rel || "")
     return s.length <= 512 && /^[A-Za-z0-9_./+@=~-]+$/.test(s)
       && !s.startsWith("/") && !s.startsWith("\\") && s.split("/").indexOf("..") === -1
-      && s.indexOf(":") === -1
+      && s.indexOf(":") === -1 && !s.endsWith("/") && s.indexOf("//") === -1
   }
   function url(rel) {
     var b = baseOf()
@@ -147,7 +148,7 @@ Panel {
     root.phase = 0
     root.phaseMsg = force ? "re-fetching index (35 MB)\u2026" : "loading index\u2026"
     var sc=root.scriptPath("fetch-manifest.py")
-    fetchProc.command = ["/usr/bin/python3", sc].concat(force ? ["--force"] : [])
+    fetchProc.command = ["python3", sc].concat(force ? ["--force"] : [])
     fetchWatchdog.start()
     fetchProc.running = true
   }
@@ -262,11 +263,11 @@ Panel {
       root.applySlug = v.n
       root.applyPhase = 1
       root.applyMsg = "setting wallpaper…"
-      wallpaperProc.command = ["/usr/bin/python3", root.scriptPath("set-wallpaper.py"), root.baseOf(), rel]
+      wallpaperProc.command = ["python3", root.scriptPath("set-wallpaper.py"), root.baseOf(), rel]
       wallpaperProc.running = true
       return
     }
-    applyProc.command = ["/usr/bin/python3", root.scriptPath("apply-theme.py"),
+    applyProc.command = ["python3", root.scriptPath("apply-theme.py"),
                          v.n, root.baseOf(), v.ct, v.bg, fallbackP].slice()
     applyProc.running = true
   }
@@ -294,7 +295,7 @@ Panel {
     if (!rel || !baseOf()) return
     if (wallpaperProc.running) return
     applyPhase = 1; applyMsg = "setting wallpaper…"
-    wallpaperProc.command = ["/usr/bin/python3", root.scriptPath("set-wallpaper.py"), baseOf(), rel]
+    wallpaperProc.command = ["python3", root.scriptPath("set-wallpaper.py"), baseOf(), rel]
     wallpaperProc.running = true
   }
   function setAutoInterval(sec) { autoIntervalSec = sec }
@@ -357,6 +358,7 @@ Panel {
     repeat: false
     onTriggered: {
       if (root.phase === 0) {
+        fetchProc.running = false
         root.phase = 2
         root.phaseMsg = "fetch timed out \u2014 the 35 MB index is unreachable"
       }
@@ -412,7 +414,7 @@ Panel {
         }
         Qt.callLater(function() {
           if (root.bar && root.bar.run) root.bar.run("omarchy theme set " + root.applySlug)
-          else Quickshell.execDetached(["/usr/bin/omarchy", "theme", "set", root.applySlug])
+          else Quickshell.execDetached(["omarchy", "theme", "set", root.applySlug])
         })
         Qt.callLater(function() { root.loadCurrentTheme() })
       } else {

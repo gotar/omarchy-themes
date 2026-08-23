@@ -44,6 +44,12 @@ def load_cached_manifest():
     try:
         hit = json.loads(data.decode("utf-8"))
         _sec.validate_slim_manifest(hit)
+        # Future timestamp (clock skew) must not pin the cache forever.
+        try:
+            if int(hit.get("fetchedAt", 0)) > int(time.time()) + 60:
+                return None
+        except Exception:
+            return None
         return hit
     except Exception:
         return None
@@ -132,6 +138,12 @@ def slim_entry(path, e):
             continue
         themes[v] = {"n": n, "ct": ct, "bg": bg, "c": colors}
     try:
+        thumb_raw = _as_str(e.get("thumb_path"))
+        if thumb_raw and not _sec.safe_relpath(thumb_raw):
+            thumb_raw = ""
+        med_raw = _as_str(e.get("medium_path"))
+        if med_raw and not _sec.safe_relpath(med_raw):
+            med_raw = ""
         return {
             "p": path,
             "t": _as_str(e.get("title")) or path.rsplit("/", 1)[-1],
@@ -140,8 +152,8 @@ def slim_entry(path, e):
             "tags": _as_tags(e.get("tags")),
             "w": _as_int(e.get("width")),
             "h": _as_int(e.get("height")),
-            "thumb": _as_str(e.get("thumb_path")),
-            "med": _as_str(e.get("medium_path")) or path,
+            "thumb": thumb_raw,
+            "med": med_raw or path,
             "pal": _as_pal(e.get("colors")),
             "th": themes,
         }
@@ -154,9 +166,14 @@ def main():
     now = int(time.time())
     if not force:
         hit = load_cached_manifest()
-        if hit and "entries" in hit and now - int(hit.get("fetchedAt", 0)) < TTL:
-            print(json.dumps(hit, separators=(",", ":")))
-            return
+        if hit and "entries" in hit:
+            try:
+                fetched = int(hit.get("fetchedAt", 0))
+            except Exception:
+                fetched = 0
+            if fetched <= now and now - fetched < TTL:
+                print(json.dumps(hit, separators=(",", ":")))
+                return
 
     os.makedirs(CACHE_DIR, exist_ok=True)
     if not _sec.is_allowed_url(SOURCE):

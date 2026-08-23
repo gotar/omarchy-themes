@@ -19,6 +19,13 @@ describe('Model.bucketRes', () => {
     assert.equal(sandbox.bucketRes(800, 600), '<=720p');
     assert.equal(sandbox.bucketRes(null, 600), null);
   });
+  it('buckets portrait by max dimension (not width only)', () => {
+    // portrait 2160×3840 must be 4K (max=3840), not 1080p (width 2160)
+    assert.equal(sandbox.bucketRes(2160, 3840), '4K');
+    assert.equal(sandbox.bucketRes(1080, 1920), '1080p');
+    assert.equal(sandbox.bucketRes(800, 6000), '5K');
+    assert.equal(sandbox.bucketRes(600, 800), '<=720p');
+  });
 });
 
 describe('Model.prep', () => {

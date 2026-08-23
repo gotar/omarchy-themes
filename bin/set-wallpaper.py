@@ -47,6 +47,17 @@ def main():
     # light/a.jpg collide.
     dest = os.path.join(cache_dir, *rel.split("/"))
     os.makedirs(os.path.dirname(dest), exist_ok=True)
+    # Opportunistic cleanup of the old flat-cache layout (basename only)
+    # that would have let dark/a.jpg and light/a.jpg collide.
+    flat_old = os.path.join(cache_dir, os.path.basename(rel))
+    if flat_old != dest and os.path.isfile(flat_old):
+        try:
+            # Only remove if it looks like the old flat file, not a
+            # legitimate top-level entry (rel with no slash).
+            if "/" in rel:
+                os.unlink(flat_old)
+        except OSError:
+            pass
 
     # Reuse the cache only if the entry exists and passes the image sniff;
     # anything invalid is re-downloaded (and then re-validated).

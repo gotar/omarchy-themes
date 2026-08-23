@@ -82,7 +82,7 @@ class TestSec(unittest.TestCase):
                 "thumb": "dark/green/t.jpg",
                 "med": "dark/green/m.jpg",
                 "pal": ["#112233"],
-                "th": {"palette": {"n": "Palette", "ct": "c.toml", "bg": "bg.jpg",
+                "th": {"palette": {"n": "a-mountain-aether", "ct": "colors.toml", "bg": "bg.jpg",
                                     "c": ["#000000"] * 16}},
             }]
         }
@@ -98,6 +98,12 @@ class TestSec(unittest.TestCase):
         bad2["entries"][0]["p"] = "../../etc/passwd"
         with self.assertRaises(ValueError):
             _sec.validate_slim_manifest(bad2)
+
+        # theme name with shell metacharacters must be rejected
+        bad3 = json.loads(json.dumps(good))
+        bad3["entries"][0]["th"]["palette"]["n"] = "evil; touch /tmp/pwned"
+        with self.assertRaises(ValueError):
+            _sec.validate_slim_manifest(bad3)
 
     def test_read_capped(self):
         import tempfile

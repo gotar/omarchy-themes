@@ -35,6 +35,16 @@ MAX_PATH = 512
 MAX_UTF8_WALLPAPERS_JS = 128 << 20  # decoded JS string cap (raw is capped, this guards decode blowup)
 
 SAFE_REL_RE = re.compile(r"^[A-Za-z0-9_./+@=~-]+$")
+# Theme names double as slugs passed to `omarchy theme set` and later to
+# bash -lc by the shared bar: only plain lowercase words/digits/dashes are
+# accepted, never shell metacharacters or spaces.
+SAFE_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
+
+
+def safe_slug(slug):
+    """True only for slugs safe to interpolate into a shell command."""
+    return (isinstance(slug, str) and bool(SAFE_SLUG_RE.match(slug))
+            and len(slug) <= 256)
 
 
 def fail(msg):
@@ -183,6 +193,8 @@ def validate_slim_manifest(obj):
                 v2 = t.get(k2) or ""
                 if not isinstance(v2, str) or len(v2) > MAX_STR:
                     raise ValueError("theme %r must be a short string" % k2)
+                if k2 == "n" and not safe_slug(v2):
+                    raise ValueError("theme name is not a safe slug")
                 if k2 in ("ct", "bg") and not safe_relpath(v2):
                     raise ValueError("theme %r is not a safe relative path" % k2)
             c = t.get("c") or []

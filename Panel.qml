@@ -66,7 +66,21 @@ Panel {
     return u
   }
   function baseOf() { return db ? String(db.base || "") : "" }
-  function url(rel) { return baseOf() + "/" + String(rel || "").replace(/^\/+/, "") }
+  // Builds a media URL. Both parts are validate-it-early: `base` comes from
+  // the manifest (https + allowlisted host) and rel must be a safe relative
+  // path — anything else yields "" so Image/Process never see it.
+  function safeRel(rel) {
+    var s = String(rel || "")
+    return s.length <= 512 && /^[A-Za-z0-9_./+@=~-]+$/.test(s)
+      && !s.startsWith("/") && !s.startsWith("\\") && s.indexOf("..") === -1
+      && s.indexOf(":") === -1
+  }
+  function url(rel) {
+    var b = baseOf()
+    if (!b || !/^https:\/\/[A-Za-z0-9.-]+\//.test(b + "/")) return ""
+    if (!root.safeRel(rel)) return ""
+    return b + "/" + String(rel).replace(/^\/+/, "")
+  }
   function entryAt(i) { return db && db.entries ? db.entries[i] : null }
 
   function setQuery(text) {
@@ -228,6 +242,11 @@ Panel {
       root.applyMsg = "missing theme data in index"
       return
     }
+    if (!root.safeSlug(v.n)) {
+      root.applyPhase = 4
+      root.applyMsg = "theme name is not a safe slug"
+      return
+    }
     root.applySlug = v.n
     root.applyPhase = 1
     root.applyMsg = "downloading " + v.n
@@ -277,10 +296,12 @@ Panel {
   }
   function setAutoInterval(sec) { autoIntervalSec = sec }
 
-  function switchPanel(direction) {
-    if (root.bar && typeof root.bar.switchPanelFrom === "function")
-      return root.bar.switchPanelFrom(root.hostWidget || root, direction)
-    return false
+  // Slug validation: theme names come from the remote index and are later
+  // interpolated into `omarchy theme set <slug>` (which the shared bar runs
+  // through bash -lc). Only plain lowercase slugs with [a-z0-9._-] are allowed.
+  function safeSlug(s) {
+    s = String(s || "")
+    return /^[a-z0-9][a-z0-9._-]*$/.test(s) && s.length <= 256
   }
 
   onOpenedChanged: {
@@ -374,9 +395,14 @@ Panel {
         // Close before theme switch — `omarchy theme set` reloads Hyprland+sell
         // which would kill this Process mid-flight and look like a freeze.
         root.close()
+        if (!root.safeSlug(root.applySlug)) {
+          root.applyPhase = 4
+          root.applyMsg = "theme name is not a safe slug"
+          return
+        }
         Qt.callLater(function() {
           if (root.bar && root.bar.run) root.bar.run("omarchy theme set " + root.applySlug)
-          else Quickshell.execDetached(["omarchy", "theme", "set", root.applySlug])
+          else Quickshell.execDetached(["/usr/bin/omarchy", "theme", "set", root.applySlug])
         })
         Qt.callLater(function() { root.loadCurrentTheme() })
       } else {
@@ -1051,6 +1077,7 @@ Panel {
                   fillMode: Image.PreserveAspectCrop
                   asynchronous: true
                   cache: false
+                  sourceSize: Qt.size(480, 480)
                   source: card.entry ? root.url(card.entry.thumb) : ""
                   onSourceChanged: { if (status !== Image.Ready) opacity = 0 }
                   onStatusChanged: { opacity = (status === Image.Ready) ? 1 : 0 }
@@ -1280,6 +1307,7 @@ Panel {
             Text {
               width: detailCol.width - Style.space(260)
               text: detail.entry ? (detail.entry.t || detail.entry.p) : ""
+              textFormat: Text.PlainText
               elide: Text.ElideRight
               color: root.fg
               font.family: root.mono
@@ -1292,6 +1320,7 @@ Panel {
                 ? (detail.entry.tone + " \u00b7 " + detail.entry.color
                    + " \u00b7 " + detail.entry.w + "\u00d7" + detail.entry.h)
                 : ""
+              textFormat: Text.PlainText
               color: root.dim
               font.family: root.mono
               font.pointSize: Style.font.caption
@@ -1322,6 +1351,7 @@ Panel {
                   fillMode: Image.PreserveAspectCrop
                   asynchronous: true
                   cache: false
+                  sourceSize: Qt.size(1920, 1920)
                   source: detail.entry ? root.url(detail.entry.med) : ""
                   onSourceChanged: { if (status !== Image.Ready) opacity = 0 }
                   onStatusChanged: { opacity = (status === Image.Ready) ? 1 : 0 }
@@ -1376,6 +1406,7 @@ Panel {
                       anchors.left: parent.left
                       anchors.leftMargin: 7
                       text: modelData
+                      textFormat: Text.PlainText
                       color: root.dim
                       font.family: root.mono
                       font.pointSize: Style.font.caption
@@ -1506,6 +1537,7 @@ Panel {
             text: root.applyPhase === 0
               ? "\u2190 \u2192 wallpaper \u00b7 \u2191 \u2193 variant \u00b7 enter apply \u00b7 esc back"
               : root.applyMsg
+            textFormat: Text.PlainText
             color: root.applyPhase === 3 ? root.okC
               : (root.applyPhase === 4 ? root.errC : root.faint)
             font.family: root.mono

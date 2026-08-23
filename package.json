@@ -1,0 +1,14 @@
+{
+  "name": "gotar.omarchy-themes",
+  "version": "1.0.0",
+  "description": "Themes Gallery — 3088 wallpapers × 5 variants",
+  "type": "module",
+  "scripts": {
+    "test": "node --test tests/Model.test.js",
+    "test:py": "python3 -m unittest discover -s tests/python -v",
+    "test:qml": "qmllint -I /usr/share/omarchy/shell -I /usr/lib/qt6/qml Panel.qml BarWidget.qml && omarchy plugin validate ./",
+    "test:all": "npm test && npm run test:py 2>&1 | head -n 30; npm run test:qml"
+  },
+  "keywords": ["omarchy", "quickshell", "themes", "wallpaper"],
+  "license": "MIT"
+}

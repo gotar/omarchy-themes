@@ -11,6 +11,7 @@ Browse, search and preview like on the website, then apply any variant as a nati
 - **4× grid** of thumbnails (throttled, async) with palette dots
 - **Detail**: large preview + extracted palette + tags + 5 variants with 16-color ANSI ramps → **Apply** per variant
 - **One-click apply**: `bin/apply-theme.py` fetches `colors.toml` and the wallpaper from `wallpapers.hel1.your-objectstorage.com`, writes atomically to `~/.config/omarchy/themes/<slug>/` (`colors.toml` + `backgrounds/<img>`), then `omarchy theme set <slug>`. Re-apply is idempotent. If the theme background is private (403) it falls back to the original wallpaper automatically.
+- **Tooltips**: hover any button (shuffle, refresh, reset, Theme/Wallpaper, AUTO intervals, apply) for a hint (`PanelToolTip`).
 
 ## Install
 
@@ -39,13 +40,13 @@ Adds 🖼️ to the bar. Left-click opens the gallery, **right-click opens Aethe
 | `r` | Re-fetch index (bypass 24 h cache) |
 | `Tab` | Switch to prev/next open panel |
 
-Hover + click everywhere: facets, cards, variant rows, breadcrumbs, search.
+Hover + click everywhere: facets, cards, variant rows, breadcrumbs, search — with tooltips on the controls.
 
 ### Random & Auto
 
-- **🔀 Shuffle** (header, next to `R`) or `Apply Random` in the `AUTO` filter section — picks a random wallpaper from the *currently filtered* set and applies it (variant + wallpaper in Theme mode, only wallpaper in Wallpaper mode).
-- **AUTO** — filter rail `AUTO` lets you pick `Off · 5m · 15m · 30m · 60m`. When on, a `Timer` fires every interval and calls the same random logic, even while the gallery is closed (the `Panel` root stays loaded via the bar widget). Great for a live wallpaper rotation that respects your tone/color/resolution filters. Set `AUTO 15m` + `dark + green + ≥5K` and you get a fresh dark-green 5K wallpaper every quarter hour.
-- **Wallpaper only** — filter rail `MODE` toggle `Theme ↔ Wallpaper`. In `Wallpaper` mode `Apply` (and random) only sets the image via `bin/set-wallpaper.py` + `omarchy-theme-bg-set` without touching `colors.toml`/theme — ideal if you love your current theme colors and just want the image.
+- **🔀 Shuffle** (header, next to `R`) or `↻ now` in the `AUTO` bar — picks a random wallpaper from the *currently filtered* set and applies it (variant + wallpaper in Theme mode, only wallpaper in Wallpaper mode).
+- **MODE bar** — on its own row right below the search field: `Theme ↔ Wallpaper`. In `Wallpaper` mode `Apply` (and random) only sets the image via `bin/set-wallpaper.py` + `omarchy-theme-bg-set` without touching `colors.toml`/theme — ideal if you love your current theme colors and just want the image.
+- **AUTO** — the same bar's `AUTO` picker lets you choose `Off · 5m · 15m · 30m · 60m`. When on, a `Timer` fires every interval and calls the same random logic, even while the gallery is closed (the `Panel` root stays loaded via the bar widget). Great for a live wallpaper rotation that respects your tone/color/resolution filters. Set `AUTO 15m` + `dark + green + ≥5K` and you get a fresh dark-green 5K wallpaper every quarter hour.
 
 ## How it works
 
@@ -59,15 +60,15 @@ No extra network beyond index + media.
 
 ```
 manifest.json          id gotar.omarchy-themes, kind bar-widget, on-demand, center
-BarWidget.qml          🖼️ JetBrainsMono Nerd Font button, left=toggle, right=Aether, header 🔀 random
-Panel.qml              900×640 KeyboardPanel + PanelKeyCatcher, search (dark translucent), filter rail (TONE/COLOR/RESOLUTION + MODE Theme/Wallpaper + AUTO Off/5/15/30/60), GridView, detail, IpcHandler, auto Timer, wallpaperProc
+BarWidget.qml          🖼️ JetBrainsMono Nerd Font button, left=toggle, right=Aether
+Panel.qml              1020×720 KeyboardPanel + PanelKeyCatcher, search (dark translucent), MODE/AUTO bar row, filter rail (TONE/COLOR/RESOLUTION), pinned GridView (anchored, never overflows), detail, IpcHandler, auto Timer, wallpaperProc, PanelToolTip hints
 Model.js               .pragma library — bucketRes, prep, apply, variant helpers, titleCase
 bin/fetch-manifest.py  wallpapers.js → slim manifest → cache
 bin/apply-theme.py     colors + background (with fallback med→p) → theme (detached, panel closes first to avoid Hyprland freeze)
 bin/set-wallpaper.py   wallpaper only → cache → omarchy-theme-bg-set
 ```
 
-Window is `fittedContentWidth(900)` × `fittedContentHeight(640)` so the 4-column grid and detail (½ image + palette/tags + 5 ramps) breathe. Search field is dark translucent (`Qt.alpha(Color.background,0.32)` → `0.55` on focus) with subtle border.
+Layout is `1020×720` (`Style.space`) so the 4-column grid and detail (½ image + palette/tags + 5 ramps) breathe: header search → MODE/AUTO bar → rail + grid → status. The grid right edge is anchored to the panel (no width arithmetic), so added controls can never push thumbnails outside. Search field is dark translucent (`Qt.alpha(Color.background,0.32)` → `0.55` on focus) with subtle border.
 
 ## Credits & license
 

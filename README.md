@@ -2,7 +2,7 @@
 
 Center-bar gallery for **[bjarneo/omarchy-themes](https://bjarneo.github.io/omarchy-themes/)** — 3,088 wallpapers, each with five theme variants (Palette · Warm · Cool · Material · Aether).
 
-Browse, search and preview like on the website, then apply any variant as a native Omarchy theme in one click. Lives in the center of the bar right after the weather widget (****).
+Browse, search and preview like on the website, then apply any variant as a native Omarchy theme in one click. Lives in the center of the bar right after the weather widget (🖼️).
 
 ![Themes Gallery](preview.png)
 
@@ -22,14 +22,14 @@ omarchy bar put gotar.omarchy-themes --after omarchy.weather
 
 Alternative: clone to `~/.config/omarchy/plugins/gotar.omarchy-themes/` then `omarchy-shell shell rescanPlugins`.
 
-Adds **** to the bar. Left-click opens the gallery, **right-click opens Aether**.
+Adds 🖼️ to the bar. Left-click opens the gallery, **right-click opens Aether**.
 
 ## Use
 
 | Mouse / Key | Action |
 |---|---|
-| **Left click ** | Open / close gallery |
-| **Right click ** | Open **Aether** (`aether`) |
+| **Left click 🖼️** | Open / close gallery |
+| **Right click 🖼️** | Open **Aether** (`aether`) |
 | Click card / `Enter` | Open detail |
 | `← →` / `↑ ↓` | Browse wallpapers / cycle variant |
 | `Enter` in detail | Apply selected variant |
@@ -53,7 +53,7 @@ No extra network beyond index + media.
 
 ```
 manifest.json          id gotar.omarchy-themes, kind bar-widget, on-demand, center
-BarWidget.qml           JetBrainsMono Nerd Font button, left=toggle, right=Aether
+BarWidget.qml          🖼️ JetBrainsMono Nerd Font button, left=toggle, right=Aether
 Panel.qml              900×640 KeyboardPanel + PanelKeyCatcher, search (dark translucent), filter rail, GridView, detail, IpcHandler toggle/close/open
 Model.js               .pragma library — bucketRes, prep, apply, variant helpers, titleCase
 bin/fetch-manifest.py  wallpapers.js → slim manifest → cache

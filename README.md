@@ -1,5 +1,9 @@
 # Themes Gallery — gotar.omarchy-themes
 
+[![Available on Omarchy Plugins](https://img.shields.io/badge/Omarchy_Plugins-gotar.omarchy--themes-8A2BE2?style=flat&labelColor=1a1a1a)](https://omarchyplugins.com/plugin.html?id=gotar.omarchy-themes)
+
+> **Install from the marketplace:** [omarchyplugins.com/plugin.html?id=gotar.omarchy-themes](https://omarchyplugins.com/plugin.html?id=gotar.omarchy-themes) — open the page and copy the install command.
+
 Center-bar gallery for **[bjarneo/omarchy-themes](https://bjarneo.github.io/omarchy-themes/)** — 3,000+ wallpapers, each with five theme variants (Palette · Warm · Cool · Material · Aether).
 
 Browse, search and preview like on the website, then apply any variant as a native Omarchy theme in one click. Lives in the center of the bar right after the weather widget (🖼️).
@@ -15,13 +19,28 @@ Browse, search and preview like on the website, then apply any variant as a nati
 
 ## Install
 
+### From Omarchy Plugins marketplace (recommended for discovery)
+
+Browse and install from the marketplace page — it shows the verified install command, version and preview:
+
+**[https://omarchyplugins.com/plugin.html?id=gotar.omarchy-themes](https://omarchyplugins.com/plugin.html?id=gotar.omarchy-themes)**
+
+Click **Copy** on the page, then run the copied command (same as below):
+
 ```sh
 omarchy plugin add https://github.com/gotar/omarchy-themes.git --enable
 omarchy bar put gotar.omarchy-themes --after omarchy.weather
 # or: omarchy bar put gotar.omarchy-themes --section center
 ```
 
-Alternative: clone to `~/.config/omarchy/plugins/gotar.omarchy-themes/`, then add the widget to the bar (same as above) and rescan:
+### Direct install (Git URL)
+
+```sh
+omarchy plugin add https://github.com/gotar/omarchy-themes.git --enable
+omarchy bar put gotar.omarchy-themes --after omarchy.weather
+```
+
+Alternative — manual clone to `~/.config/omarchy/plugins/gotar.omarchy-themes/`, then add the widget to the bar (same as above) and rescan:
 
 ```sh
 omarchy bar put gotar.omarchy-themes --section center

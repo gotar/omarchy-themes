@@ -124,9 +124,9 @@ def slim_entry(path, e):
         t = th_all.get(v)
         if not isinstance(t, dict):
             continue
-        c = t.get("colors") or {}
+        c = t.get("colors")
         if not isinstance(c, dict):
-            c = {}
+            continue
         try:
             n = _as_str(t.get("name"))
             ct = _as_str(t.get("colors_toml"))
@@ -142,6 +142,8 @@ def slim_entry(path, e):
             continue
         if bg and not _sec.safe_relpath(bg):
             continue
+        if any(not HEX6.fullmatch(x) for x in colors):
+            continue
         themes[v] = {"n": n, "ct": ct, "bg": bg, "c": colors}
     try:
         thumb_raw = _as_str(e.get("thumb_path"))
@@ -150,14 +152,18 @@ def slim_entry(path, e):
         med_raw = _as_str(e.get("medium_path"))
         if med_raw and not _sec.safe_relpath(med_raw):
             med_raw = ""
+        w = _as_int(e.get("width"))
+        h = _as_int(e.get("height"))
+        if w <= 0 or h <= 0:
+            raise ValueError("dimensions must be positive")
         return {
             "p": path,
             "t": _as_str(e.get("title")) or path.rsplit("/", 1)[-1],
             "tone": _as_str(e.get("tone")),
             "color": _as_str(e.get("color")),
             "tags": _as_tags(e.get("tags")),
-            "w": _as_int(e.get("width")),
-            "h": _as_int(e.get("height")),
+            "w": w,
+            "h": h,
             "thumb": thumb_raw,
             "med": med_raw or path,
             "pal": _as_pal(e.get("colors")),

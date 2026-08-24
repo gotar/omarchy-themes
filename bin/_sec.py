@@ -8,19 +8,18 @@ Addresses marketplace review findings:
     is cached or printed into the QML StdioCollector
   - image payloads are sniffed by magic bytes before they reach disk / shell
 """
+import contextlib
 import json
 import os
 import re
+import signal
 import sys
+import threading
 import time
+import tomllib
 import urllib.error
 import urllib.parse
 import urllib.request
-
-try:
-    import tomllib
-except ImportError:  # Python < 3.11
-    tomllib = None
 
 UA = {"User-Agent": "omarchy-themes-plugin/1.0 (+omarchy shell)"}
 
@@ -115,39 +114,69 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         raise urllib.error.HTTPError(newurl, code, "redirect blocked: %r" % newurl[:120], hdrs, fp)
 
 
+@contextlib.contextmanager
+def _hard_deadline(seconds):
+    """Interrupt blocking Linux I/O after an absolute wall-clock deadline."""
+    if not isinstance(seconds, (int, float)) or isinstance(seconds, bool) or seconds <= 0:
+        raise ValueError("deadline must be a positive number")
+    # Omarchy is Linux and runtime calls happen on the main thread. Keep a
+    # monotonic-check fallback for unusual embedded/test threads where SIGALRM
+    # cannot be installed.
+    can_alarm = hasattr(signal, "setitimer") \
+        and threading.current_thread() is threading.main_thread()
+    if not can_alarm:
+        yield
+        return
+    old_handler = signal.getsignal(signal.SIGALRM)
+    old_timer = signal.getitimer(signal.ITIMER_REAL)
+    started = time.monotonic()
+
+    def timed_out(_signum, _frame):
+        raise TimeoutError("download exceeded %g s" % seconds)
+
+    signal.signal(signal.SIGALRM, timed_out)
+    signal.setitimer(signal.ITIMER_REAL, seconds)
+    try:
+        yield
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, old_handler)
+        if old_timer[0] > 0:
+            elapsed = time.monotonic() - started
+            signal.setitimer(signal.ITIMER_REAL, max(0.000001, old_timer[0] - elapsed),
+                             old_timer[1])
+
+
 def http_get(url, max_bytes, total_seconds=300):
-    """Streaming https GET with a hard byte ceiling, host allowlist and a total deadline.
+    """Streaming https GET with a hard byte ceiling, host allowlist and deadline.
 
-    Redirects are blocked: an attacker controlling the initial host must not
-    be able to bounce the fetch to an internal/sensitive URL via 302.
-
-    The per-socket timeout passed to urllib only bounds a single socket op;
-    a server dripping bytes slowly could otherwise keep us alive forever. We
-    therefore enforce an absolute wall-clock deadline on the whole download.
+    Redirects are blocked, and SIGALRM bounds the whole blocking open/read
+    sequence—not merely the gaps between socket operations.
     """
     if not is_allowed_url(url):
         raise ValueError("URL not on allowlist: %r" % url[:120])
     req = urllib.request.Request(url, headers=UA)
     opener = urllib.request.build_opener(_NoRedirect())
     started = time.monotonic()
-    with opener.open(req, timeout=120) as resp:
-        # Defense-in-depth: if a redirect slipped through, re-validate.
-        final = getattr(resp, "url", url)
-        if final != url and not is_allowed_url(final):
-            raise ValueError("redirect target not on allowlist: %r" % final[:120])
-        total = 0
-        out = bytearray()
-        while True:
-            if time.monotonic() - started > total_seconds:
-                raise TimeoutError("download exceeded %d s" % total_seconds)
-            chunk = resp.read(min(1 << 16, max_bytes - total + 1))
-            if not chunk:
-                break
-            total += len(chunk)
-            if total > max_bytes:
-                raise ValueError("download exceeded %d bytes" % max_bytes)
-            out += chunk
-        return bytes(out)
+    with _hard_deadline(total_seconds):
+        with opener.open(req, timeout=min(120, max(1, total_seconds))) as resp:
+            # Defense-in-depth: if a redirect slipped through, re-validate.
+            final = getattr(resp, "url", url)
+            if final != url and not is_allowed_url(final):
+                raise ValueError("redirect target not on allowlist: %r" % final[:120])
+            total = 0
+            out = bytearray()
+            while True:
+                if time.monotonic() - started > total_seconds:
+                    raise TimeoutError("download exceeded %g s" % total_seconds)
+                chunk = resp.read(min(1 << 16, max_bytes - total + 1))
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > max_bytes:
+                    raise ValueError("download exceeded %d bytes" % max_bytes)
+                out += chunk
+            return bytes(out)
 
 
 def read_file_capped(path, max_bytes):
@@ -218,22 +247,22 @@ def validate_toml(data, what="colors.toml"):
         text = data.decode("utf-8")
     except UnicodeDecodeError:
         raise ValueError("%s is not valid UTF-8" % what)
-    if tomllib is not None:
-        try:
-            obj = tomllib.loads(text)
-        except Exception as e:
-            raise ValueError("%s is not valid TOML: %s" % (what, e))
-        if not isinstance(obj, dict):
-            raise ValueError("%s must be a TOML table" % what)
-        recognized = {"accent", "cursor", "foreground", "background",
-                      "selection_foreground", "selection_background", "mode"}
-        recognized |= {"color%d" % i for i in range(16)}
-        if not recognized.intersection(obj.keys()):
-            raise ValueError("%s does not look like an Omarchy theme" % what)
-    else:
-        # Python < 3.11 fallback: at least one 'key = value' assignment.
-        if not re.search(r"^[A-Za-z_][A-Za-z0-9_]*\s*=", text, re.M | re.S):
-            raise ValueError("%s does not look like TOML" % what)
+    try:
+        obj = tomllib.loads(text)
+    except Exception as e:
+        raise ValueError("%s is not valid TOML: %s" % (what, e))
+    if not isinstance(obj, dict):
+        raise ValueError("%s must be a TOML table" % what)
+    required = {"background", "foreground"} | {"color%d" % i for i in range(16)}
+    missing = sorted(required - obj.keys())
+    if missing:
+        raise ValueError("%s is missing required colors: %s" % (what, ", ".join(missing)))
+    for key in required:
+        value = obj.get(key)
+        if not isinstance(value, str) or not re.fullmatch(r"#[0-9a-fA-F]{6}", value):
+            raise ValueError("%s %s must be #rrggbb" % (what, key))
+    if "mode" in obj and obj["mode"] not in ("dark", "light"):
+        raise ValueError("%s mode must be dark or light" % what)
     return True
 
 
@@ -252,13 +281,15 @@ def validate_slim_manifest(obj):
     entries = obj.get("entries")
     if not isinstance(entries, list) or len(entries) > MAX_ENTRIES:
         raise ValueError("manifest entries must be a list <= %d" % MAX_ENTRIES)
-    if "count" in obj and obj.get("count") != len(entries):
-        raise ValueError("manifest count does not match entries")
+    if "count" in obj:
+        count = obj.get("count")
+        if isinstance(count, bool) or not isinstance(count, int) or count != len(entries):
+            raise ValueError("manifest count does not match entries")
     for e in entries:
         if not isinstance(e, dict):
             raise ValueError("manifest entry must be an object")
         for key in ("p", "t", "tone", "color", "thumb", "med"):
-            v = e.get(key) or ""
+            v = e.get(key)
             if not isinstance(v, str) or len(v) > MAX_STR:
                 raise ValueError("entry %r must be a short string" % key)
             if key == "p" and not safe_relpath(v):
@@ -271,33 +302,33 @@ def validate_slim_manifest(obj):
                 or not isinstance(w, int) or not isinstance(h, int) \
                 or w <= 0 or h <= 0:
             raise ValueError("entry w/h must be positive integers")
-        tags = e.get("tags") or []
+        tags = e.get("tags")
         if not isinstance(tags, list) or len(tags) > MAX_TAGS:
             raise ValueError("entry tags must be a list <= %d" % MAX_TAGS)
         for t in tags:
             if not isinstance(t, str) or len(t) > 128:
                 raise ValueError("tag must be a short string")
-        pal = e.get("pal") or []
+        pal = e.get("pal")
         if not isinstance(pal, list) or len(pal) > MAX_PAL:
             raise ValueError("entry pal must be a list <= %d" % MAX_PAL)
         for c in pal:
             if not isinstance(c, str) or len(c) > 32 or not re.fullmatch(r"#[0-9a-fA-F]{6}", c):
                 raise ValueError("entry pal color must be #rrggbb")
-        th = e.get("th") or {}
+        th = e.get("th")
         if not isinstance(th, dict) or len(th) > MAX_THEMES_VARIANTS:
             raise ValueError("entry th must be a dict <= %d" % MAX_THEMES_VARIANTS)
         for vname, t in th.items():
             if not isinstance(vname, str) or not isinstance(t, dict):
                 raise ValueError("theme variant must map to an object")
             for k2 in ("n", "ct", "bg"):
-                v2 = t.get(k2) or ""
+                v2 = t.get(k2)
                 if not isinstance(v2, str) or len(v2) > MAX_STR:
                     raise ValueError("theme %r must be a short string" % k2)
                 if k2 == "n" and not safe_slug(v2):
                     raise ValueError("theme name is not a safe slug")
                 if k2 in ("ct", "bg") and v2 and not safe_relpath(v2):
                     raise ValueError("theme %r is not a safe relative path" % k2)
-            c = t.get("c") or []
+            c = t.get("c")
             if not isinstance(c, list) or len(c) != 16:
                 raise ValueError("theme c must be a 16-item list")
             for x in c:

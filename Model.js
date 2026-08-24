@@ -122,9 +122,23 @@ function variantsOf(entry) {
   return out
 }
 
-// "a-b-c" -> "A B C" (matches how `omarchy theme list` prints display names).
+// "a-b-c" -> "A B C" (display helper).
 function titleCase(slug) {
   return String(slug || "")
     .replace(/[-_]+/g, " ")
     .replace(/\b\w/g, function (c) { return c.toUpperCase() })
+}
+
+// Reverse `omarchy theme current`: it title-cases and replaces only dashes
+// with spaces, while underscores and dots remain literal.
+function slugFromThemeCurrent(displayName) {
+  return String(displayName || "").trim().toLowerCase().replace(/\s+/g, "-")
+}
+
+// Compact live facet counts so the two resolution controls never overlap.
+function formatCount(value) {
+  var n = Math.max(0, Number(value) || 0)
+  if (n < 1000) return String(Math.floor(n))
+  var digits = n >= 10000 ? 0 : 1
+  return (n / 1000).toFixed(digits).replace(/\.0$/, "") + "k"
 }

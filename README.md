@@ -93,7 +93,7 @@ Hover + click everywhere: facets, cards, variant rows, breadcrumbs, search — w
 
 ## How it works
 
-- **Index**: first open runs `bin/fetch-manifest.py` → downloads ~35 MB `https://bjarneo.github.io/omarchy-themes/wallpapers.js` (`window.WALLPAPERS` + `WALLPAPERS_BASE_URL`), slims to ~7 MB JSON (`p/t/tone/color/tags/w/h/thumb/med/pal/th{5×{n,ct,bg,c[16]}}`) and caches to `~/.cache/gotar.omarchy-themes/manifest.json` (24 h TTL). Subsequent opens read cache instantly; if a refresh fails while offline, the last valid (expired) index is used instead of a dead gallery.
+- **Index**: first open runs `bin/fetch-manifest.py` → downloads ~35 MB `https://bjarneo.github.io/omarchy-themes/wallpapers.js` (`window.WALLPAPERS` + `WALLPAPERS_BASE_URL`), slims to ~7 MB JSON (`p/t/tone/color/tags/w/h/thumb/med/pal/th{5×{n,ct,bg,c[16]}}`) and caches to `~/.cache/gotar.omarchy-themes/manifest.json` (24 h TTL). Subsequent opens read cache instantly; if an automatic non-forced refresh fails while offline, the last valid (expired) index is used instead of a dead gallery. Explicit `R`/Retry remains strict and reports a failed forced refresh.
 - **Thumbnails / previews**: `Image { asynchronous:true; cache:false }` from the same bucket (`thumb_path`, `medium_path`, `p`).
 - **Apply**: `bin/apply-theme.py <slug> <base> <ct> <bg> [fallbackP]` → `try_download(ct)` → `try_download(bg)` → fallback to `p` on 403 → write. Panel then applies the theme and confirms via `omarchy theme current` (the gallery shows a real failure, not a fire-and-forget "✓"). Current theme shown via `omarchy theme current` → highlighted `active` pill.
 - **Wallpaper cache**: downloaded wallpapers live in `~/.cache/gotar.omarchy-themes/wallpapers/` and are pruned to ~1 GiB / 300 files (oldest first, the currently-linked background is kept).
@@ -108,7 +108,7 @@ BarWidget.qml          🖼️ JetBrainsMono Nerd Font button, left=toggle, righ
 Panel.qml              1020×720 KeyboardPanel + PanelKeyCatcher, search (dark translucent), MODE/AUTO bar row, filter rail (TONE/COLOR/RESOLUTION), pinned GridView (anchored, never overflows), detail, IpcHandler, auto Timer, wallpaperProc, PanelToolTip hints
 Model.js               .pragma library — bucketRes, prep, apply, variant helpers, titleCase
 bin/fetch-manifest.py  wallpapers.js → slim manifest → cache
-bin/apply-theme.py     colors + background (with fallback med→p) → theme (detached, panel closes first to avoid Hyprland freeze)
+bin/apply-theme.py     colors + background (with fallback med→p) → observable `omarchy theme set` + current-theme confirmation
 bin/set-wallpaper.py   wallpaper only → cache → omarchy-theme-bg-set
 ```
 

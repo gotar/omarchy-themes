@@ -260,11 +260,17 @@ class TestSec(unittest.TestCase):
         self.assertFalse(_sec.safe_slug("x" * 257))
 
     def test_toml(self):
-        good = b'foreground = "#ffffff"\nbackground = "#000000"\ncolor0 = "#000000"\n'
+        good = ('foreground = "#ffffff"\nbackground = "#000000"\n'
+                + "".join('color%d = "#%06x"\n' % (i, i) for i in range(16))).encode()
         self.assertTrue(_sec.validate_toml(good))
-        # Valid TOML but not an Omarchy theme shape.
+        # Valid TOML but not a complete Omarchy theme shape.
         with self.assertRaises(ValueError):
             _sec.validate_toml(b"[colors]\nx = 1\n")
+        with self.assertRaises(ValueError):
+            _sec.validate_toml(b'foreground = []\nbackground = "#000000"\n')
+        incomplete = b'foreground = "#ffffff"\nbackground = "#000000"\ncolor0 = "#000000"\n'
+        with self.assertRaises(ValueError):
+            _sec.validate_toml(incomplete)
         # Non-TOML / HTML / binary payloads must be refused.
         with self.assertRaises(ValueError):
             _sec.validate_toml(b"this is not TOML")
@@ -372,6 +378,13 @@ class TestSec(unittest.TestCase):
         with self.assertRaises(ValueError):
             _sec.validate_slim_manifest(badn)
 
+        # Falsy values of the wrong type must not be coerced to empty defaults.
+        for key, value in (("tone", 0), ("tags", ""), ("pal", 0), ("th", [])):
+            wrong = json.loads(json.dumps(good))
+            wrong["entries"][0][key] = value
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                _sec.validate_slim_manifest(wrong)
+
     def test_read_capped(self):
         tmp = pathlib.Path(tempfile.mkstemp(prefix="_sec_cap_")[1])
         try:
@@ -427,13 +440,30 @@ class TestPanelSource(unittest.TestCase):
     def test_apply_single_flight(self):
         text = (REPO / "Panel.qml").read_text()
         self.assertIn("readonly property bool operationBusy", text)
+        self.assertIn("themeSetProc.running", text)
         self.assertIn("if (root.operationBusy || root.applyPhase === 1", text)
         self.assertIn("if (root.operationBusy) return", text)
 
-    def test_activation_confirmed(self):
+    def test_activation_is_observable_and_slug_canonical(self):
         text = (REPO / "Panel.qml").read_text()
         self.assertIn("function evalActivation()", text)
-        self.assertIn("root.activationPending", text)
+        self.assertIn("function currentThemeSlug()", text)
+        self.assertIn('id: themeSetProc', text)
+        self.assertIn('["timeout", "180", "omarchy", "theme", "set"', text)
+        self.assertIn("function finishThemeSetCycle()", text)
+        self.assertIn("root.themeSetStderrSeen", text)
+        self.assertNotIn('bar.run("omarchy theme set', text)
+
+    def test_accessible_is_attached_not_instantiated(self):
+        text = (REPO / "Panel.qml").read_text()
+        self.assertNotIn("Accessible {", text)
+        self.assertIn("Accessible.role: Accessible.Button", text)
+
+    def test_fetch_replacement_waits_for_exit_and_stream(self):
+        text = (REPO / "Panel.qml").read_text()
+        self.assertIn("root.fetchExitSeen", text)
+        self.assertIn("root.fetchStreamSeen", text)
+        self.assertIn("function finishFetchCycle()", text)
 
     def test_debounced_enter_flushes_first(self):
         text = (REPO / "Panel.qml").read_text()
@@ -475,7 +505,53 @@ class TestCI(unittest.TestCase):
         self.assertNotIn(" || true", text)
 
 
+class TestMetadata(unittest.TestCase):
+    def test_package_and_manifest_versions_match(self):
+        package = json.loads((REPO / "package.json").read_text())
+        manifest = json.loads((REPO / "manifest.json").read_text())
+        self.assertEqual(package["version"], manifest["version"])
+        self.assertEqual(package["name"], manifest["id"])
+
+
 class TestHttpDeadline(unittest.TestCase):
+    def test_blocking_open_is_interrupted(self):
+        class SlowOpener:
+            def open(self, req, timeout=None):
+                time.sleep(0.25)
+                raise AssertionError("hard deadline did not interrupt blocking open")
+        orig_build = urllib.request.build_opener
+        urllib.request.build_opener = lambda *h: SlowOpener()
+        started = time.monotonic()
+        try:
+            with self.assertRaises(TimeoutError):
+                _sec.http_get("https://bjarneo.github.io/x", 1024, total_seconds=0.03)
+            self.assertLess(time.monotonic() - started, 0.2)
+        finally:
+            urllib.request.build_opener = orig_build
+
+    def test_blocking_read_is_interrupted(self):
+        class SlowResp:
+            url = "https://bjarneo.github.io/x"
+            def read(self, n):
+                time.sleep(0.25)
+                return b""
+            def __enter__(self):
+                return self
+            def __exit__(self, *a):
+                return False
+        class SlowOpener:
+            def open(self, req, timeout=None):
+                return SlowResp()
+        orig_build = urllib.request.build_opener
+        urllib.request.build_opener = lambda *h: SlowOpener()
+        started = time.monotonic()
+        try:
+            with self.assertRaises(TimeoutError):
+                _sec.http_get("https://bjarneo.github.io/x", 1024, total_seconds=0.03)
+            self.assertLess(time.monotonic() - started, 0.2)
+        finally:
+            urllib.request.build_opener = orig_build
+
     def test_total_deadline(self):
         class FakeClock:
             def __init__(self):
@@ -530,6 +606,23 @@ class TestFetchTagsAndContract(unittest.TestCase):
         self.assertEqual(out["thumb"], "")
         _sec.validate_slim_manifest({"base": MEDIA_BASE, "count": 1, "entries": [out]})
 
+    def test_missing_dimensions_drop_only_the_entry(self):
+        e = {"title": "No dimensions", "tone": "dark", "color": "blue",
+             "width": None, "height": 1080, "thumb_path": "a/t.jpg",
+             "medium_path": "a/m.jpg", "colors": [], "themes": {}, "tags": []}
+        self.assertIsNone(self.fetch.slim_entry("a/no-dim.jpg", e))
+
+    def test_bad_variant_color_drops_only_the_variant(self):
+        e = {"title": "Bad variant", "tone": "dark", "color": "blue",
+             "width": 1920, "height": 1080, "thumb_path": "a/t.jpg",
+             "medium_path": "a/m.jpg", "colors": [], "tags": [],
+             "themes": {"aether": {"name": "bad-aether", "colors_toml": "a.toml",
+                                     "background": "a.jpg",
+                                     "colors": {("color%d" % i): "not-a-color" for i in range(16)}}}}
+        out = self.fetch.slim_entry("a/bad.jpg", e)
+        self.assertEqual(out["th"], {})
+        _sec.validate_slim_manifest({"base": MEDIA_BASE, "count": 1, "entries": [out]})
+
 
 class TestStaleCacheFallback(unittest.TestCase):
     def setUp(self):
@@ -577,7 +670,7 @@ class TestStaleCacheFallback(unittest.TestCase):
             self._patch(td, force=True)
             try:
                 self._write_stale(td, int(time.time()) - 86400 * 10)
-                with self.assertRaises(SystemExit):
+                with contextlib.redirect_stdout(io.StringIO()), self.assertRaises(SystemExit):
                     self.fetch.main()
             finally:
                 self._restore()
@@ -587,7 +680,7 @@ class TestStaleCacheFallback(unittest.TestCase):
             self._patch(td)
             try:
                 self._write_stale(td, int(time.time()) + 86400 * 5)
-                with self.assertRaises(SystemExit):
+                with contextlib.redirect_stdout(io.StringIO()), self.assertRaises(SystemExit):
                     self.fetch.main()
             finally:
                 self._restore()
@@ -618,22 +711,83 @@ class TestSetWallpaperE2E(unittest.TestCase):
                     buf = io.StringIO()
                     with contextlib.redirect_stdout(buf):
                         fem.main()
-                    return buf.getvalue(), None
+                    dest = os.path.join(home, ".cache/gotar.omarchy-themes/wallpapers", *rel.split("/"))
+                    linked = os.path.islink(link) and os.path.realpath(link) == os.path.realpath(dest)
+                    return buf.getvalue(), linked
             finally:
                 _sec.http_get = orig_get
                 sys.argv = orig_argv
 
-    def test_primary_helper_success(self):
-        out, _ = self._run("dark/a.jpg", 0)
+    def test_primary_helper_success_is_verified(self):
+        # Fake helper exits 0 but creates no link; set_background must detect
+        # that false success and complete the verified fallback itself.
+        out, linked = self._run("dark/a.jpg", 0)
         self.assertIn('"ok": true', out)
+        self.assertTrue(linked)
 
     def test_fallback_symlink_success(self):
-        out, _ = self._run("dark/b.jpg", 7)
+        out, linked = self._run("dark/b.jpg", 7)
         self.assertIn('"ok": true', out)
+        self.assertTrue(linked)
 
     def test_failure_when_all_activation_fails(self):
         with self.assertRaises(SystemExit):
             self._run("dark/c.jpg", 7, block_link_dir=True)
+
+    def test_missing_wallpaper_cannot_report_success(self):
+        fem = load_module("set-wallpaper")
+        with tempfile.TemporaryDirectory() as td:
+            ok, err = fem.set_background(os.path.join(td, "missing.jpg"))
+            self.assertFalse(ok)
+            self.assertIn("does not exist", err)
+
+    def test_rejects_symlinked_cache_component(self):
+        fem = load_module("set-wallpaper")
+        with tempfile.TemporaryDirectory() as home:
+            cache_root = os.path.join(home, ".cache/gotar.omarchy-themes/wallpapers")
+            outside = os.path.join(home, "outside")
+            os.makedirs(cache_root, exist_ok=True)
+            os.makedirs(outside)
+            os.symlink(outside, os.path.join(cache_root, "dark"))
+            orig_get = _sec.http_get
+            orig_argv = sys.argv
+            _sec.http_get = lambda url, limit, **kw: JPEG
+            sys.argv = ["set-wallpaper.py", MEDIA_BASE, "dark/a.jpg"]
+            try:
+                with mock.patch.dict(os.environ, {"HOME": home}), \
+                        contextlib.redirect_stdout(io.StringIO()), self.assertRaises(SystemExit):
+                    fem.main()
+            finally:
+                _sec.http_get = orig_get
+                sys.argv = orig_argv
+            self.assertFalse(os.path.exists(os.path.join(outside, "a.jpg")))
+
+    def test_rejects_cache_component_swapped_during_download(self):
+        fem = load_module("set-wallpaper")
+        with tempfile.TemporaryDirectory() as home:
+            cache_root = os.path.join(home, ".cache/gotar.omarchy-themes/wallpapers")
+            outside = os.path.join(home, "outside")
+            dark = os.path.join(cache_root, "dark")
+            os.makedirs(dark, exist_ok=True)
+            os.makedirs(outside)
+            orig_get = _sec.http_get
+            orig_argv = sys.argv
+
+            def swap_then_download(url, limit, **kw):
+                os.rmdir(dark)
+                os.symlink(outside, dark)
+                return JPEG
+
+            _sec.http_get = swap_then_download
+            sys.argv = ["set-wallpaper.py", MEDIA_BASE, "dark/a.jpg"]
+            try:
+                with mock.patch.dict(os.environ, {"HOME": home}), \
+                        contextlib.redirect_stdout(io.StringIO()), self.assertRaises(SystemExit):
+                    fem.main()
+            finally:
+                _sec.http_get = orig_get
+                sys.argv = orig_argv
+            self.assertFalse(os.path.exists(os.path.join(outside, "a.jpg")))
 
 
 class TestApplySymlinkAndCleanup(unittest.TestCase):
@@ -650,9 +804,9 @@ class TestApplySymlinkAndCleanup(unittest.TestCase):
             _sec.http_get = lambda url, limit, **kw: JPEG
             sys.argv = ["apply-theme.py", "victim", MEDIA_BASE, "a.toml", "b.jpg", "c.jpg"]
             try:
-                with mock.patch.dict(os.environ, {"HOME": home}):
-                    with self.assertRaises(SystemExit):
-                        apply_theme.main()
+                with mock.patch.dict(os.environ, {"HOME": home}), \
+                        contextlib.redirect_stdout(io.StringIO()), self.assertRaises(SystemExit):
+                    apply_theme.main()
             finally:
                 _sec.http_get = orig_get
                 sys.argv = orig_argv
@@ -701,6 +855,24 @@ class TestCacheLimit(unittest.TestCase):
             self.assertEqual(removed2, 1)
             self.assertTrue(os.path.exists(new))
             self.assertFalse(os.path.exists(old))
+
+    def test_requested_old_wallpaper_is_never_pruned(self):
+        fem = load_module("set-wallpaper")
+        with tempfile.TemporaryDirectory() as td:
+            requested = os.path.join(td, "requested.jpg")
+            current = os.path.join(td, "current.jpg")
+            for pth in (requested, current):
+                with open(pth, "wb") as f:
+                    f.write(b"x" * 16)
+            os.utime(requested, (1, 1))
+            os.utime(current, (2, 2))
+            # Both may temporarily exceed a 1-file cap; neither active path
+            # may be removed just to satisfy the cache budget.
+            removed = fem.enforce_cache_limit(td, max_bytes=1 << 30, max_files=1,
+                                               protected=[requested, current])
+            self.assertEqual(removed, 0)
+            self.assertTrue(os.path.exists(requested))
+            self.assertTrue(os.path.exists(current))
 
 
 if __name__ == "__main__":

@@ -99,4 +99,14 @@ describe('Model.variant helpers', () => {
     assert.equal(sandbox.titleCase('mate-02-aether'), 'Mate 02 Aether');
     assert.equal(sandbox.titleCase('a_b-c'), 'A B C');
   });
+  it('slugFromThemeCurrent preserves underscore and dot slug semantics', () => {
+    assert.equal(sandbox.slugFromThemeCurrent('Mate 02 Aether'), 'mate-02-aether');
+    assert.equal(sandbox.slugFromThemeCurrent('A_b C'), 'a_b-c');
+    assert.equal(sandbox.slugFromThemeCurrent('A.b C'), 'a.b-c');
+  });
+  it('formatCount keeps large facet counts compact', () => {
+    assert.equal(sandbox.formatCount(999), '999');
+    assert.equal(sandbox.formatCount(3074), '3.1k');
+    assert.equal(sandbox.formatCount(20000), '20k');
+  });
 });

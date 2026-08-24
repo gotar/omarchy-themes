@@ -15,9 +15,9 @@ Exit: 0 on success (prints {"ok":true,"path":...}), 1 on failure.
 """
 import json
 import os
+import secrets
 import subprocess
 import sys
-import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _sec
@@ -51,22 +51,58 @@ def enforce_cache_limit(cache_dir, max_bytes=MAX_CACHE_BYTES, max_files=MAX_CACH
             except OSError:
                 continue
     total = sum(s for _, s, _ in files)
-    # Newest first so we can pop the oldest from the tail.
-    files.sort(key=lambda x: x[0], reverse=True)
+    count = len(files)
     removed = 0
-    while files and (len(files) > max_files or total > max_bytes):
-        if len(files) == 1 and os.path.realpath(files[0][2]) in protected:
+    # Remove oldest unprotected files first. Protected files remain counted so
+    # limits are never accidentally considered satisfied merely because a
+    # protected entry was popped from an in-memory work list.
+    for _mtime, size, full in sorted(files, key=lambda x: x[0]):
+        if count <= max_files and total <= max_bytes:
             break
-        _mtime, size, full = files.pop()
         if os.path.realpath(full) in protected:
             continue
         try:
             os.unlink(full)
             total -= size
+            count -= 1
             removed += 1
         except OSError:
             pass
     return removed
+
+
+def write_cache_file(cache_dir, parts, data):
+    """Atomically write through retained no-follow directory descriptors."""
+    flags = os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0) \
+        | getattr(os, "O_CLOEXEC", 0)
+    dir_fd = os.open(cache_dir, flags)
+    tmp_name = ""
+    try:
+        for comp in parts[:-1]:
+            next_fd = os.open(comp, flags, dir_fd=dir_fd)
+            os.close(dir_fd)
+            dir_fd = next_fd
+        tmp_name = ".download-%d-%s" % (os.getpid(), secrets.token_hex(8))
+        file_fd = os.open(tmp_name, os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                          0o600, dir_fd=dir_fd)
+        try:
+            with os.fdopen(file_fd, "wb") as f:
+                f.write(data)
+        except Exception:
+            try:
+                os.close(file_fd)
+            except OSError:
+                pass
+            raise
+        os.replace(tmp_name, parts[-1], src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
+        tmp_name = ""
+    finally:
+        if tmp_name:
+            try:
+                os.unlink(tmp_name, dir_fd=dir_fd)
+            except OSError:
+                pass
+        os.close(dir_fd)
 
 
 def set_background(dest):
@@ -78,33 +114,45 @@ def set_background(dest):
     `dest`. The `omarchy-shell -q background set` IPC is best-effort because
     quiet mode always exits 0 even when the shell is not running.
     """
+    if not os.path.isfile(dest):
+        return False, "wallpaper file does not exist: %s" % dest
     bg_err = ""
+    link = os.path.expanduser("~/.local/state/omarchy/current/background")
     try:
         res = subprocess.run(["omarchy-theme-bg-set", dest],
                              capture_output=True, text=True, timeout=30)
-        if res.returncode == 0:
+        # The helper currently has no `set -e`; its final quiet IPC can return
+        # 0 even if the preceding `ln` failed. Verify the actual source of
+        # truth instead of trusting only its exit code.
+        if res.returncode == 0 and os.path.isfile(dest) and os.path.islink(link) \
+                and os.path.realpath(link) == os.path.realpath(dest):
             return True, ""
-        bg_err = (res.stderr or res.stdout or "").strip() or "helper failed"
+        bg_err = (res.stderr or res.stdout or "").strip() or "helper did not set background link"
     except FileNotFoundError:
         bg_err = "omarchy-theme-bg-set not found"
     except Exception as e:
         bg_err = str(e)
 
-    link = os.path.expanduser("~/.local/state/omarchy/current/background")
+    tmp_link = "%s.tmp.%d" % (link, os.getpid())
     try:
         os.makedirs(os.path.dirname(link), exist_ok=True)
-        tmp_link = link + ".tmp"
         try:
             os.unlink(tmp_link)
         except OSError:
             pass
         os.symlink(dest, tmp_link)
         os.replace(tmp_link, link)
-        if os.path.realpath(link) != os.path.realpath(dest):
-            raise OSError("background symlink does not point at the wallpaper")
+        if not os.path.isfile(dest) or not os.path.islink(link) \
+                or os.path.realpath(link) != os.path.realpath(dest):
+            raise OSError("background symlink does not point at a wallpaper file")
     except Exception as e:
         bg_err = (bg_err + "; " if bg_err else "") + "fallback symlink failed: %s" % e
         return False, bg_err
+    finally:
+        try:
+            os.unlink(tmp_link)
+        except OSError:
+            pass
 
     # Notify the shell (best effort; the shell may not be running).
     try:
@@ -129,9 +177,22 @@ def main():
     cache_dir = os.path.expanduser("~/.cache/gotar.omarchy-themes/wallpapers")
     # Mirror the relative path tree: safe_relpath already guarantees no '..'
     # components, and keying by basename alone would let dark/a.jpg and
-    # light/a.jpg collide.
-    dest = os.path.join(cache_dir, *rel.split("/"))
+    # light/a.jpg collide. Refuse cache-directory symlinks before any write.
+    parts = rel.split("/")
+    try:
+        if os.path.islink(cache_dir):
+            fail("wallpaper cache root must not be a symlink")
+        _sec.ensure_not_symlink(cache_dir, parts[:-1])
+    except ValueError as ex:
+        fail(str(ex))
+    dest = os.path.join(cache_dir, *parts)
     os.makedirs(os.path.dirname(dest), exist_ok=True)
+    try:
+        _sec.ensure_not_symlink(cache_dir, parts[:-1])
+    except ValueError as ex:
+        fail(str(ex))
+    if os.path.islink(dest):
+        fail("wallpaper cache entry must not be a symlink: %r" % dest)
     # Opportunistic cleanup of the old flat-cache layout (basename only)
     # that would have let dark/a.jpg and light/a.jpg collide.
     flat_old = os.path.join(cache_dir, os.path.basename(rel))
@@ -160,23 +221,18 @@ def main():
         try:
             data = _sec.http_get(url, _sec.BYTE_LIMIT_MEDIA)
             _sec.sniff_image(data, "wallpaper")
-            fd, tmp = tempfile.mkstemp(dir=cache_dir)
-            try:
-                with os.fdopen(fd, "wb") as f:
-                    f.write(data)
-                os.replace(tmp, dest)
-            except Exception:
-                try:
-                    os.unlink(tmp)
-                except OSError:
-                    pass
-                raise
+            write_cache_file(cache_dir, parts, data)
         except Exception as e:
             fail(str(e))
 
-    # Prune the wallpaper cache, keeping the currently-linked background.
+    # Mark this access for LRU and prune without ever deleting either the
+    # currently-linked image or the image we are about to activate.
+    try:
+        os.utime(dest, None)
+    except OSError:
+        pass
     link_now = os.path.expanduser("~/.local/state/omarchy/current/background")
-    protected = []
+    protected = [dest]
     try:
         protected.append(os.readlink(link_now))
     except OSError:

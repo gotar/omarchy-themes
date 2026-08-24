@@ -12,9 +12,15 @@ import json
 import os
 import re
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
+
+try:
+    import tomllib
+except ImportError:  # Python < 3.11
+    tomllib = None
 
 UA = {"User-Agent": "omarchy-themes-plugin/1.0 (+omarchy shell)"}
 
@@ -87,12 +93,18 @@ def is_allowed_url(url):
 
 
 def safe_relpath(rel):
-    """True for manifest-relative paths: no .., no scheme, printable ascii."""
+    """True for manifest-relative paths: no ../. components, no scheme, printable ascii.
+
+    Both '..' and '.' are rejected as path components (never a bare '.', 'a/.'
+    or 'a/./b', which would let a download target the cache directory itself).
+    A dot is fine inside a file name, e.g. 'img..jpg' or 'a/img..jpg'.
+    """
     if not isinstance(rel, str) or not rel or len(rel) > MAX_PATH:
         return False
-    if rel.startswith(("/", "\\")) or ".." in rel.split("/") or ":" in rel:
+    if rel.startswith(("/", "\\")) or rel.endswith("/") or "//" in rel or ":" in rel:
         return False
-    if rel.endswith("/") or "//" in rel:
+    parts = rel.split("/")
+    if ".." in parts or "." in parts:
         return False
     return bool(SAFE_REL_RE.match(rel))
 
@@ -103,16 +115,21 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         raise urllib.error.HTTPError(newurl, code, "redirect blocked: %r" % newurl[:120], hdrs, fp)
 
 
-def http_get(url, max_bytes):
-    """Streaming https GET with a hard byte ceiling and host allowlist.
+def http_get(url, max_bytes, total_seconds=300):
+    """Streaming https GET with a hard byte ceiling, host allowlist and a total deadline.
 
     Redirects are blocked: an attacker controlling the initial host must not
     be able to bounce the fetch to an internal/sensitive URL via 302.
+
+    The per-socket timeout passed to urllib only bounds a single socket op;
+    a server dripping bytes slowly could otherwise keep us alive forever. We
+    therefore enforce an absolute wall-clock deadline on the whole download.
     """
     if not is_allowed_url(url):
         raise ValueError("URL not on allowlist: %r" % url[:120])
     req = urllib.request.Request(url, headers=UA)
     opener = urllib.request.build_opener(_NoRedirect())
+    started = time.monotonic()
     with opener.open(req, timeout=120) as resp:
         # Defense-in-depth: if a redirect slipped through, re-validate.
         final = getattr(resp, "url", url)
@@ -121,6 +138,8 @@ def http_get(url, max_bytes):
         total = 0
         out = bytearray()
         while True:
+            if time.monotonic() - started > total_seconds:
+                raise TimeoutError("download exceeded %d s" % total_seconds)
             chunk = resp.read(min(1 << 16, max_bytes - total + 1))
             if not chunk:
                 break
@@ -146,6 +165,23 @@ def read_file_capped(path, max_bytes):
     return data
 
 
+def ensure_not_symlink(base, components):
+    """Return base joined with components, refusing to traverse any existing symlink.
+
+    Guards against a malicious/accidental <slug>/backgrounds symlink redirecting
+    writes outside the expected theme directory.
+    """
+    cur = base
+    for comp in components:
+        cur = os.path.join(cur, comp)
+        try:
+            if os.path.islink(cur):
+                raise ValueError("path component is a symlink: %s" % cur)
+        except OSError:
+            raise
+    return cur
+
+
 def sniff_image(data, what="media"):
     """Reject downloads that are not a recognized image container."""
     if not isinstance(data, (bytes, bytearray)):
@@ -169,20 +205,45 @@ def sniff_image(data, what="media"):
 
 
 def validate_toml(data, what="colors.toml"):
-    """Light TOML sanity: textual, under the TOML byte ceiling."""
+    """Validate that data is real TOML with the minimal Omarchy theme shape.
+
+    Any HTML error page or broken payload is refused instead of being written
+    to disk as a theme's colors.toml.
+    """
     if not isinstance(data, bytes) or len(data) > BYTE_LIMIT_TOML:
         raise ValueError("%s exceeds %d bytes" % (what, BYTE_LIMIT_TOML))
     if b"\x00" in data[:4096]:
         raise ValueError("%s is binary, expected TOML text" % what)
     try:
-        data.decode("utf-8")
+        text = data.decode("utf-8")
     except UnicodeDecodeError:
         raise ValueError("%s is not valid UTF-8" % what)
+    if tomllib is not None:
+        try:
+            obj = tomllib.loads(text)
+        except Exception as e:
+            raise ValueError("%s is not valid TOML: %s" % (what, e))
+        if not isinstance(obj, dict):
+            raise ValueError("%s must be a TOML table" % what)
+        recognized = {"accent", "cursor", "foreground", "background",
+                      "selection_foreground", "selection_background", "mode"}
+        recognized |= {"color%d" % i for i in range(16)}
+        if not recognized.intersection(obj.keys()):
+            raise ValueError("%s does not look like an Omarchy theme" % what)
+    else:
+        # Python < 3.11 fallback: at least one 'key = value' assignment.
+        if not re.search(r"^[A-Za-z_][A-Za-z0-9_]*\s*=", text, re.M | re.S):
+            raise ValueError("%s does not look like TOML" % what)
     return True
 
 
 def validate_slim_manifest(obj):
-    """Validate the slim manifest shape enough that the QML UI can trust it."""
+    """Validate the slim manifest shape enough that the QML UI can trust it.
+
+    This is the single source of truth the producer (fetch-manifest.py) must
+    satisfy: `thumb`/`med` and theme `ct`/`bg` are optional (may be ""), and
+    every produced entry must pass this check or be dropped upstream.
+    """
     if not isinstance(obj, dict):
         raise ValueError("manifest must be an object")
     base = obj.get("base")
@@ -191,6 +252,8 @@ def validate_slim_manifest(obj):
     entries = obj.get("entries")
     if not isinstance(entries, list) or len(entries) > MAX_ENTRIES:
         raise ValueError("manifest entries must be a list <= %d" % MAX_ENTRIES)
+    if "count" in obj and obj.get("count") != len(entries):
+        raise ValueError("manifest count does not match entries")
     for e in entries:
         if not isinstance(e, dict):
             raise ValueError("manifest entry must be an object")
@@ -198,10 +261,16 @@ def validate_slim_manifest(obj):
             v = e.get(key) or ""
             if not isinstance(v, str) or len(v) > MAX_STR:
                 raise ValueError("entry %r must be a short string" % key)
-            if key in ("p", "thumb", "med") and not safe_relpath(v):
+            if key == "p" and not safe_relpath(v):
+                raise ValueError("entry p is not a safe relative path")
+            if key in ("thumb", "med") and v and not safe_relpath(v):
                 raise ValueError("entry %r is not a safe relative path" % key)
-        if not isinstance(e.get("w"), int) or not isinstance(e.get("h"), int):
-            raise ValueError("entry w/h must be integers")
+        w = e.get("w")
+        h = e.get("h")
+        if isinstance(w, bool) or isinstance(h, bool) \
+                or not isinstance(w, int) or not isinstance(h, int) \
+                or w <= 0 or h <= 0:
+            raise ValueError("entry w/h must be positive integers")
         tags = e.get("tags") or []
         if not isinstance(tags, list) or len(tags) > MAX_TAGS:
             raise ValueError("entry tags must be a list <= %d" % MAX_TAGS)
@@ -226,12 +295,12 @@ def validate_slim_manifest(obj):
                     raise ValueError("theme %r must be a short string" % k2)
                 if k2 == "n" and not safe_slug(v2):
                     raise ValueError("theme name is not a safe slug")
-                if k2 in ("ct", "bg") and not safe_relpath(v2):
+                if k2 in ("ct", "bg") and v2 and not safe_relpath(v2):
                     raise ValueError("theme %r is not a safe relative path" % k2)
             c = t.get("c") or []
             if not isinstance(c, list) or len(c) != 16:
                 raise ValueError("theme c must be a 16-item list")
             for x in c:
-                if not isinstance(x, str) or len(x) > 32:
-                    raise ValueError("theme color must be a short string")
+                if not isinstance(x, str) or not re.fullmatch(r"#[0-9a-fA-F]{6}", x):
+                    raise ValueError("theme color must be #rrggbb")
     return obj

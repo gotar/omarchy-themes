@@ -23,10 +23,95 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _sec
 
 MIN_CACHED_BYTES = 1024  # keep small/invalid cache entries from being reused
+MAX_CACHE_FILES = 300
+MAX_CACHE_BYTES = 1 << 30  # ~1 GiB total cap on the downloaded-wallpaper cache
 
 
 def fail(msg):
     _sec.fail_apply(msg)
+
+
+def enforce_cache_limit(cache_dir, max_bytes=MAX_CACHE_BYTES, max_files=MAX_CACHE_FILES,
+                        protected=()):
+    """Prune the oldest cached wallpapers until under the size/file limits.
+
+    `protected` is an iterable of paths (e.g. the currently-linked background)
+    that must never be deleted. Returns the number of files removed.
+    """
+    protected = {os.path.realpath(p) for p in protected if p}
+    files = []
+    for root, _dirs, names in os.walk(cache_dir):
+        for n in names:
+            full = os.path.join(root, n)
+            try:
+                if os.path.islink(full) or not os.path.isfile(full):
+                    continue
+                st = os.stat(full)
+                files.append((st.st_mtime, st.st_size, full))
+            except OSError:
+                continue
+    total = sum(s for _, s, _ in files)
+    # Newest first so we can pop the oldest from the tail.
+    files.sort(key=lambda x: x[0], reverse=True)
+    removed = 0
+    while files and (len(files) > max_files or total > max_bytes):
+        if len(files) == 1 and os.path.realpath(files[0][2]) in protected:
+            break
+        _mtime, size, full = files.pop()
+        if os.path.realpath(full) in protected:
+            continue
+        try:
+            os.unlink(full)
+            total -= size
+            removed += 1
+        except OSError:
+            pass
+    return removed
+
+
+def set_background(dest):
+    """Activate `dest` as the background. Returns (ok, error) with a real result.
+
+    Primary path is the `omarchy-theme-bg-set` helper. If it fails, create the
+    current-background symlink ourselves (the shell's background plugin reads
+    this link) and only report success once the link is verified to point at
+    `dest`. The `omarchy-shell -q background set` IPC is best-effort because
+    quiet mode always exits 0 even when the shell is not running.
+    """
+    bg_err = ""
+    try:
+        res = subprocess.run(["omarchy-theme-bg-set", dest],
+                             capture_output=True, text=True, timeout=30)
+        if res.returncode == 0:
+            return True, ""
+        bg_err = (res.stderr or res.stdout or "").strip() or "helper failed"
+    except FileNotFoundError:
+        bg_err = "omarchy-theme-bg-set not found"
+    except Exception as e:
+        bg_err = str(e)
+
+    link = os.path.expanduser("~/.local/state/omarchy/current/background")
+    try:
+        os.makedirs(os.path.dirname(link), exist_ok=True)
+        tmp_link = link + ".tmp"
+        try:
+            os.unlink(tmp_link)
+        except OSError:
+            pass
+        os.symlink(dest, tmp_link)
+        os.replace(tmp_link, link)
+        if os.path.realpath(link) != os.path.realpath(dest):
+            raise OSError("background symlink does not point at the wallpaper")
+    except Exception as e:
+        bg_err = (bg_err + "; " if bg_err else "") + "fallback symlink failed: %s" % e
+        return False, bg_err
+
+    # Notify the shell (best effort; the shell may not be running).
+    try:
+        subprocess.run(["omarchy-shell", "-q", "background", "set", dest], timeout=5)
+    except Exception:
+        pass
+    return True, ""
 
 
 def main():
@@ -76,36 +161,31 @@ def main():
             data = _sec.http_get(url, _sec.BYTE_LIMIT_MEDIA)
             _sec.sniff_image(data, "wallpaper")
             fd, tmp = tempfile.mkstemp(dir=cache_dir)
-            with os.fdopen(fd, "wb") as f:
-                f.write(data)
-            os.replace(tmp, dest)
+            try:
+                with os.fdopen(fd, "wb") as f:
+                    f.write(data)
+                os.replace(tmp, dest)
+            except Exception:
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
+                raise
         except Exception as e:
             fail(str(e))
 
-    # Set as background via omarchy helper
+    # Prune the wallpaper cache, keeping the currently-linked background.
+    link_now = os.path.expanduser("~/.local/state/omarchy/current/background")
+    protected = []
     try:
-        res = subprocess.run(["omarchy-theme-bg-set", dest], capture_output=True, text=True, timeout=30)
-        if res.returncode != 0:
-            # Fallback: direct symlink + shell IPC. NOTE: this mirrors the
-            # shell's internal state layout and IPC verb (same as
-            # omarchy-theme-bg-set does) — revisit if the shell changes them.
-            link = os.path.expanduser("~/.local/state/omarchy/current/background")
-            os.makedirs(os.path.dirname(link), exist_ok=True)
-            try:
-                if os.path.islink(link) or os.path.exists(link):
-                    os.unlink(link)
-                os.symlink(dest, link)
-            except Exception:
-                pass
-            # Notify shell (best effort, don't fail if shell not running)
-            try:
-                subprocess.run(["omarchy-shell", "-q", "background", "set", dest], timeout=5)
-            except Exception:
-                pass
-    except FileNotFoundError:
-        fail("omarchy-theme-bg-set not found")
-    except Exception as e:
-        fail(str(e))
+        protected.append(os.readlink(link_now))
+    except OSError:
+        pass
+    enforce_cache_limit(cache_dir, protected=protected)
+
+    ok, err = set_background(dest)
+    if not ok:
+        fail("could not activate wallpaper: %s" % err)
 
     print(json.dumps({"ok": True, "path": dest}))
 

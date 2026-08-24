@@ -51,9 +51,16 @@ def try_download(base, rel, dest_dir, name, kind):
         return False, str(e)
     try:
         fd, tmp = tempfile.mkstemp(dir=dest_dir)
-        with os.fdopen(fd, "wb") as f:
-            f.write(data)
-        os.replace(tmp, os.path.join(dest_dir, name))
+        try:
+            with os.fdopen(fd, "wb") as f:
+                f.write(data)
+            os.replace(tmp, os.path.join(dest_dir, name))
+        except Exception:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
     except Exception as e:
         return False, str(e)
     return True, ""
@@ -78,10 +85,21 @@ def main():
         fail("missing colors.toml path (required)")
 
     themes_root = os.path.expanduser("~/.config/omarchy/themes")
+    # Refuse to write through symlinks (a malicious or accidental <slug>
+    # symlink must not redirect colors.toml / backgrounds outside the theme dir).
+    try:
+        if os.path.islink(themes_root):
+            fail("themes root must not be a symlink")
+        _sec.ensure_not_symlink(themes_root, [slug, "backgrounds"])
+    except ValueError as ex:
+        fail(str(ex))
     dest = os.path.join(themes_root, slug)
     # slug already passed safe_slug (no '/'), so dest is always directly
     # inside themes_root — there is no path to traverse.
     os.makedirs(os.path.join(dest, "backgrounds"), exist_ok=True)
+    for sub in (dest, os.path.join(dest, "backgrounds")):
+        if os.path.islink(sub):
+            fail("themes dir is a symlink: %r" % (sub,))
 
     # colors.toml — required
     ok, err = try_download(base, ct, dest, "colors.toml", "toml")

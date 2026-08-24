@@ -3,7 +3,9 @@
 Every bug fixed in review has a dedicated assertion here so regressions
 are caught by `python3 -m unittest discover -s tests/python` and by CI.
 """
+import contextlib
 import importlib.util
+import io
 import json
 import os
 import pathlib
@@ -16,6 +18,7 @@ import unittest
 import urllib.error
 import urllib.request
 import warnings
+from unittest import mock
 warnings.simplefilter("ignore")
 
 BIN = pathlib.Path(__file__).parent.parent.parent / "bin"
@@ -212,6 +215,10 @@ class TestSec(unittest.TestCase):
         self.assertFalse(_sec.safe_relpath("../x"))
         self.assertFalse(_sec.safe_relpath("/abs"))
         self.assertFalse(_sec.safe_relpath("https://evil.com/x"))
+        # '.', 'a/.', 'a/./b' must be rejected (would hit the cache dir itself)
+        self.assertFalse(_sec.safe_relpath("."))
+        self.assertFalse(_sec.safe_relpath("a/."))
+        self.assertFalse(_sec.safe_relpath("a/./b"))
 
     def test_relpath_edge_trailing_and_double_slash(self):
         # img..jpg contains ".." as substring but not as path component — must pass
@@ -253,7 +260,16 @@ class TestSec(unittest.TestCase):
         self.assertFalse(_sec.safe_slug("x" * 257))
 
     def test_toml(self):
-        self.assertTrue(_sec.validate_toml(b"[colors]\nx = 1\n"))
+        good = b'foreground = "#ffffff"\nbackground = "#000000"\ncolor0 = "#000000"\n'
+        self.assertTrue(_sec.validate_toml(good))
+        # Valid TOML but not an Omarchy theme shape.
+        with self.assertRaises(ValueError):
+            _sec.validate_toml(b"[colors]\nx = 1\n")
+        # Non-TOML / HTML / binary payloads must be refused.
+        with self.assertRaises(ValueError):
+            _sec.validate_toml(b"this is not TOML")
+        with self.assertRaises(ValueError):
+            _sec.validate_toml(b"<html>error</html>")
         with self.assertRaises(ValueError):
             _sec.validate_toml(b"\x00\x01\x02")
 
@@ -320,6 +336,42 @@ class TestSec(unittest.TestCase):
         with self.assertRaises(ValueError):
             _sec.validate_slim_manifest(bad3)
 
+        # Optional thumb/med and ct/bg may be empty (producer/validator contract).
+        opt = json.loads(json.dumps(good))
+        opt["entries"][0]["thumb"] = ""
+        opt["entries"][0]["med"] = ""
+        opt["entries"][0]["th"]["palette"]["ct"] = ""
+        opt["entries"][0]["th"]["palette"]["bg"] = ""
+        _sec.validate_slim_manifest(opt)
+
+        # Non-hex theme color must be rejected.
+        badc = json.loads(json.dumps(good))
+        badc["entries"][0]["th"]["palette"]["c"][0] = "notacolor"
+        with self.assertRaises(ValueError):
+            _sec.validate_slim_manifest(badc)
+
+        # Non-positive / bool dimensions must be rejected.
+        badw = json.loads(json.dumps(good))
+        badw["entries"][0]["w"] = 0
+        with self.assertRaises(ValueError):
+            _sec.validate_slim_manifest(badw)
+        badbool = json.loads(json.dumps(good))
+        badbool["entries"][0]["h"] = True
+        with self.assertRaises(ValueError):
+            _sec.validate_slim_manifest(badbool)
+
+        # count mismatch must be rejected.
+        badcount = json.loads(json.dumps(good))
+        badcount["count"] = 99
+        with self.assertRaises(ValueError):
+            _sec.validate_slim_manifest(badcount)
+
+        # Empty theme name must be rejected.
+        badn = json.loads(json.dumps(good))
+        badn["entries"][0]["th"]["palette"]["n"] = ""
+        with self.assertRaises(ValueError):
+            _sec.validate_slim_manifest(badn)
+
     def test_read_capped(self):
         tmp = pathlib.Path(tempfile.mkstemp(prefix="_sec_cap_")[1])
         try:
@@ -368,8 +420,26 @@ class TestPanelSource(unittest.TestCase):
     def test_safeRel_mirrors_python(self):
         text = (REPO / "Panel.qml").read_text()
         self.assertIn('s.split(\"/\").indexOf(\"..\")', text)
+        self.assertIn('s.split(\"/\").indexOf(\".\")', text)
         self.assertIn('!s.endsWith(\"/\")', text)
         self.assertIn('s.indexOf(\"//\")', text)
+
+    def test_apply_single_flight(self):
+        text = (REPO / "Panel.qml").read_text()
+        self.assertIn("readonly property bool operationBusy", text)
+        self.assertIn("if (root.operationBusy || root.applyPhase === 1", text)
+        self.assertIn("if (root.operationBusy) return", text)
+
+    def test_activation_confirmed(self):
+        text = (REPO / "Panel.qml").read_text()
+        self.assertIn("function evalActivation()", text)
+        self.assertIn("root.activationPending", text)
+
+    def test_debounced_enter_flushes_first(self):
+        text = (REPO / "Panel.qml").read_text()
+        self.assertIn("qTimer.stop()", text)
+        self.assertIn("root.refreshFilters()", text)
+        self.assertIn("root.openDetailAt(root.cursorIdx)", text)
 
     def test_cursor_enter_uses_cursorIdx(self):
         text = (REPO / "Panel.qml").read_text()
@@ -383,16 +453,254 @@ class TestPanelSource(unittest.TestCase):
 
 
 class TestCI(unittest.TestCase):
-    def test_python_tests_not_masked(self):
+    def test_python_tests_run(self):
         text = (REPO / ".github/workflows/ci.yml").read_text()
-        self.assertNotIn("discover -s tests/python -v || true", text)
         self.assertIn("discover -s tests/python -v", text)
 
-    def test_validate_not_masked(self):
+    def test_js_tests_run(self):
         text = (REPO / ".github/workflows/ci.yml").read_text()
-        # the only || true allowed is none; validate must not be masked
-        self.assertNotIn("validate ./ || true", text)
-        self.assertIn("omarchy plugin validate ./;", text)
+        self.assertIn("node --test tests/Model.test.js", text)
+
+    def test_py_compile_runs(self):
+        text = (REPO / ".github/workflows/ci.yml").read_text()
+        self.assertIn("py_compile", text)
+
+    def test_no_fake_omarchy_steps(self):
+        # qmllint / omarchy plugin validate need the local shell and cannot run
+        # on a generic GitHub runner; they are local-only (npm run test:qml). CI
+        # must not pretend to run them with a --version masquerade or || true.
+        text = (REPO / ".github/workflows/ci.yml").read_text()
+        self.assertNotIn("qmllint", text)
+        self.assertNotIn("plugin validate", text)
+        self.assertNotIn(" || true", text)
+
+
+class TestHttpDeadline(unittest.TestCase):
+    def test_total_deadline(self):
+        class FakeClock:
+            def __init__(self):
+                self.n = 0
+            def monotonic(self):
+                self.n += 1
+                return self.n
+        class FakeResp:
+            def __init__(self, url):
+                self.url = url
+            def read(self, n):
+                return b"x" * 64
+            def __enter__(self):
+                return self
+            def __exit__(self, *a):
+                return False
+        class FakeOpener:
+            def open(self, req, timeout=None):
+                return FakeResp(req.full_url)
+        orig_time = _sec.time
+        orig_build = urllib.request.build_opener
+        urllib.request.build_opener = lambda *h: FakeOpener()
+        try:
+            _sec.time = FakeClock()
+            with self.assertRaises(TimeoutError):
+                _sec.http_get("https://bjarneo.github.io/x", 1 << 20, total_seconds=2)
+        finally:
+            _sec.time = orig_time
+            urllib.request.build_opener = orig_build
+
+
+class TestFetchTagsAndContract(unittest.TestCase):
+    def setUp(self):
+        self.fetch = load_module("fetch-manifest")
+
+    def test_too_many_tags_skips_entry(self):
+        e = {"title": "X", "tone": "dark", "color": "red", "width": 1920,
+             "height": 1080, "thumb_path": "a/t.jpg", "medium_path": "a/m.jpg",
+             "colors": [], "themes": {},
+             "tags": ["t%d" % i for i in range(65)]}
+        self.assertIsNone(self.fetch.slim_entry("a/x.jpg", e))
+
+    def test_produced_manifest_passes_validator(self):
+        e = {"title": "Y", "tone": "dark", "color": "blue", "width": 3840,
+             "height": 2160, "thumb_path": "../evil.jpg", "medium_path": "a/m.jpg",
+             "colors": ["#112233"],
+             "themes": {"aether": {"name": "y-aether",
+                                   "colors_toml": "omarchy-themes/y.toml",
+                                   "background": "",
+                                   "colors": {("color%d" % i): "#000000" for i in range(16)}}}}
+        out = self.fetch.slim_entry("a/y.jpg", e)
+        self.assertEqual(out["thumb"], "")
+        _sec.validate_slim_manifest({"base": MEDIA_BASE, "count": 1, "entries": [out]})
+
+
+class TestStaleCacheFallback(unittest.TestCase):
+    def setUp(self):
+        self.fetch = load_module("fetch-manifest")
+
+    def _write_stale(self, td, fetched_at):
+        payload = json.dumps({"base": MEDIA_BASE, "fetchedAt": fetched_at, "count": 1,
+                              "entries": [{"p": "dark/a.jpg", "t": "A", "tone": "dark",
+                                           "color": "green", "tags": [], "w": 100, "h": 100,
+                                           "thumb": "dark/a.jpg", "med": "dark/a.jpg", "pal": [],
+                                           "th": {"palette": {"n": "a-aether", "ct": "a.toml", "bg": "a.jpg", "c": ["#000000"] * 16}}}]})
+        pathlib.Path(self.fetch.MANIFEST).write_text(payload)
+
+    def _patch(self, td, force=False):
+        self._oc = self.fetch.CACHE_DIR
+        self._om = self.fetch.MANIFEST
+        self._og = _sec.http_get
+        self._oa = sys.argv
+        self.fetch.CACHE_DIR = td
+        self.fetch.MANIFEST = os.path.join(td, "manifest.json")
+        _sec.http_get = lambda *a, **k: (_ for _ in ()).throw(OSError("network down"))
+        sys.argv = ["fetch-manifest.py"] + (["--force"] if force else [])
+
+    def _restore(self):
+        self.fetch.CACHE_DIR = self._oc
+        self.fetch.MANIFEST = self._om
+        _sec.http_get = self._og
+        sys.argv = self._oa
+
+    def test_stale_cache_used_on_network_failure(self):
+        with tempfile.TemporaryDirectory() as td:
+            self._patch(td)
+            try:
+                self._write_stale(td, int(time.time()) - 86400 * 10)
+                buf = io.StringIO()
+                with contextlib.redirect_stdout(buf):
+                    self.fetch.main()
+                out = json.loads(buf.getvalue())
+                self.assertEqual(out["entries"][0]["t"], "A")
+            finally:
+                self._restore()
+
+    def test_stale_cache_not_used_on_force(self):
+        with tempfile.TemporaryDirectory() as td:
+            self._patch(td, force=True)
+            try:
+                self._write_stale(td, int(time.time()) - 86400 * 10)
+                with self.assertRaises(SystemExit):
+                    self.fetch.main()
+            finally:
+                self._restore()
+
+    def test_future_cache_not_used_as_stale(self):
+        with tempfile.TemporaryDirectory() as td:
+            self._patch(td)
+            try:
+                self._write_stale(td, int(time.time()) + 86400 * 5)
+                with self.assertRaises(SystemExit):
+                    self.fetch.main()
+            finally:
+                self._restore()
+
+
+class TestSetWallpaperE2E(unittest.TestCase):
+    def _run(self, rel, bg_exit, block_link_dir=False):
+        fem = load_module("set-wallpaper")
+        with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as bindir:
+            helper = os.path.join(bindir, "omarchy-theme-bg-set")
+            with open(helper, "w") as f:
+                f.write("#!/bin/sh\nexit %d\n" % bg_exit)
+            os.chmod(helper, 0o755)
+            sh = os.path.join(bindir, "omarchy-shell")
+            with open(sh, "w") as f:
+                f.write("#!/bin/sh\nexit 0\n")
+            os.chmod(sh, 0o755)
+            link = os.path.join(home, ".local/state/omarchy/current/background")
+            if block_link_dir:
+                os.makedirs(link, exist_ok=True)
+            orig_get = _sec.http_get
+            orig_argv = sys.argv
+            _sec.http_get = lambda url, limit, **kw: JPEG
+            sys.argv = ["set-wallpaper.py", MEDIA_BASE, rel]
+            try:
+                with mock.patch.dict(os.environ, {"HOME": home,
+                                                  "PATH": bindir + os.pathsep + os.environ.get("PATH", "")}):
+                    buf = io.StringIO()
+                    with contextlib.redirect_stdout(buf):
+                        fem.main()
+                    return buf.getvalue(), None
+            finally:
+                _sec.http_get = orig_get
+                sys.argv = orig_argv
+
+    def test_primary_helper_success(self):
+        out, _ = self._run("dark/a.jpg", 0)
+        self.assertIn('"ok": true', out)
+
+    def test_fallback_symlink_success(self):
+        out, _ = self._run("dark/b.jpg", 7)
+        self.assertIn('"ok": true', out)
+
+    def test_failure_when_all_activation_fails(self):
+        with self.assertRaises(SystemExit):
+            self._run("dark/c.jpg", 7, block_link_dir=True)
+
+
+class TestApplySymlinkAndCleanup(unittest.TestCase):
+    def test_rejects_symlinked_theme_dir(self):
+        apply_theme = load_module("apply-theme")
+        with tempfile.TemporaryDirectory() as home:
+            themes = os.path.join(home, ".config/omarchy/themes")
+            os.makedirs(themes, exist_ok=True)
+            outside = os.path.join(home, "outside")
+            os.makedirs(outside)
+            os.symlink(outside, os.path.join(themes, "victim"))
+            orig_get = _sec.http_get
+            orig_argv = sys.argv
+            _sec.http_get = lambda url, limit, **kw: JPEG
+            sys.argv = ["apply-theme.py", "victim", MEDIA_BASE, "a.toml", "b.jpg", "c.jpg"]
+            try:
+                with mock.patch.dict(os.environ, {"HOME": home}):
+                    with self.assertRaises(SystemExit):
+                        apply_theme.main()
+            finally:
+                _sec.http_get = orig_get
+                sys.argv = orig_argv
+            self.assertFalse(os.path.exists(os.path.join(outside, "colors.toml")))
+
+    def test_no_leftover_temp_on_replace_failure(self):
+        apply_theme = load_module("apply-theme")
+        orig_replace = os.replace
+        orig_get = _sec.http_get
+        _sec.http_get = lambda url, limit, **kw: JPEG
+
+        def broken_replace(src, dst):
+            raise OSError("replace failed")
+        try:
+            os.replace = broken_replace
+            with tempfile.TemporaryDirectory() as td:
+                ok, _err = apply_theme.try_download(MEDIA_BASE, "dark/a.jpg", td, "a.jpg", "image")
+                self.assertFalse(ok)
+                leftovers = [f for f in os.listdir(td) if f.startswith("tmp")]
+                self.assertEqual(leftovers, [], "temp file leaked on replace failure")
+        finally:
+            os.replace = orig_replace
+            _sec.http_get = orig_get
+
+
+class TestCacheLimit(unittest.TestCase):
+    def test_prunes_oldest_keeps_protected(self):
+        fem = load_module("set-wallpaper")
+        with tempfile.TemporaryDirectory() as td:
+            os.makedirs(os.path.join(td, "sub"))
+            old = os.path.join(td, "old.jpg")
+            new = os.path.join(td, "sub", "new.jpg")
+            for pth in (old, new):
+                with open(pth, "wb") as f:
+                    f.write(b"x" * 16)
+            os.utime(old, (1, 1))
+            os.utime(new, (2, 2))
+            removed = fem.enforce_cache_limit(td, max_bytes=1 << 30, max_files=1)
+            self.assertEqual(removed, 1)
+            self.assertFalse(os.path.exists(old))
+            self.assertTrue(os.path.exists(new))
+            with open(old, "wb") as f:
+                f.write(b"x" * 16)
+            os.utime(old, (0, 0))
+            removed2 = fem.enforce_cache_limit(td, max_bytes=1 << 30, max_files=1, protected=[new])
+            self.assertEqual(removed2, 1)
+            self.assertTrue(os.path.exists(new))
+            self.assertFalse(os.path.exists(old))
 
 
 if __name__ == "__main__":

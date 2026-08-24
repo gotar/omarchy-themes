@@ -21,14 +21,19 @@ omarchy bar put gotar.omarchy-themes --after omarchy.weather
 # or: omarchy bar put gotar.omarchy-themes --section center
 ```
 
-Alternative: clone to `~/.config/omarchy/plugins/gotar.omarchy-themes/` then `omarchy-shell shell rescanPlugins`.
+Alternative: clone to `~/.config/omarchy/plugins/gotar.omarchy-themes/`, then add the widget to the bar (same as above) and rescan:
+
+```sh
+omarchy bar put gotar.omarchy-themes --section center
+omarchy-shell shell rescanPlugins
+```
 
 Adds 🖼️ to the bar. Left-click opens the gallery, **right-click opens Aether**.
 
 ## Requirements
 
 - **Omarchy** (shell with `omarchy` CLI — `omarchy plugin`, `omarchy theme`, `omarchy-shell` IPC)
-- **Python 3** (system `python3`, only stdlib — `urllib`, `json`, `subprocess`, `tempfile`)
+- **Python 3.11+** (system `python3`, only stdlib — `urllib`, `json`, `subprocess`, `tempfile`, `tomllib`)
 - **A Nerd Font** for the bar icon (🖼️ is a FontAwesome glyph, `JetBrainsMono Nerd Font` on Omarchy)
 
 No other runtime dependencies; the QML side uses only Quickshell + `qs.Commons`/`qs.Ui` shipped with the shell.
@@ -48,6 +53,20 @@ omarchy-shell shell rescanPlugins
 ```
 
 The applied themes (`~/.config/omarchy/themes/<slug>/`) are regular Omarchy user themes and stay installed — remove them with `omarchy theme remove <slug>` if you no longer want them. The wallpaper index cache in `~/.cache/gotar.omarchy-themes/` can be deleted (it is re-fetched on next open).
+
+## Update
+
+```sh
+omarchy plugin update gotar.omarchy-themes --yes
+omarchy-shell shell rescanPlugins
+```
+
+For a manual clone:
+
+```sh
+cd ~/.config/omarchy/plugins/gotar.omarchy-themes && git pull
+omarchy-shell shell rescanPlugins
+```
 
 ## Use
 
@@ -74,9 +93,10 @@ Hover + click everywhere: facets, cards, variant rows, breadcrumbs, search — w
 
 ## How it works
 
-- **Index**: first open runs `bin/fetch-manifest.py` → downloads ~35 MB `https://bjarneo.github.io/omarchy-themes/wallpapers.js` (`window.WALLPAPERS` + `WALLPAPERS_BASE_URL`), slims to ~7 MB JSON (`p/t/tone/color/tags/w/h/thumb/med/pal/th{5×{n,ct,bg,c[16]}}`) and caches to `~/.cache/gotar.omarchy-themes/manifest.json` (24 h TTL). Subsequent opens read cache instantly.
+- **Index**: first open runs `bin/fetch-manifest.py` → downloads ~35 MB `https://bjarneo.github.io/omarchy-themes/wallpapers.js` (`window.WALLPAPERS` + `WALLPAPERS_BASE_URL`), slims to ~7 MB JSON (`p/t/tone/color/tags/w/h/thumb/med/pal/th{5×{n,ct,bg,c[16]}}`) and caches to `~/.cache/gotar.omarchy-themes/manifest.json` (24 h TTL). Subsequent opens read cache instantly; if a refresh fails while offline, the last valid (expired) index is used instead of a dead gallery.
 - **Thumbnails / previews**: `Image { asynchronous:true; cache:false }` from the same bucket (`thumb_path`, `medium_path`, `p`).
-- **Apply**: `bin/apply-theme.py <slug> <base> <ct> <bg> [fallbackP]` → `try_download(ct)` → `try_download(bg)` → fallback to `p` on 403 → write. Panel then `Process { command: ["omarchy","theme","set",slug] }`. Current theme shown via `omarchy theme current` → highlighted `active` pill.
+- **Apply**: `bin/apply-theme.py <slug> <base> <ct> <bg> [fallbackP]` → `try_download(ct)` → `try_download(bg)` → fallback to `p` on 403 → write. Panel then applies the theme and confirms via `omarchy theme current` (the gallery shows a real failure, not a fire-and-forget "✓"). Current theme shown via `omarchy theme current` → highlighted `active` pill.
+- **Wallpaper cache**: downloaded wallpapers live in `~/.cache/gotar.omarchy-themes/wallpapers/` and are pruned to ~1 GiB / 300 files (oldest first, the currently-linked background is kept).
 
 No extra network beyond index + media.
 
@@ -105,7 +125,7 @@ This plugin is **MIT** (see `LICENSE`). Wallpapers remain under their original l
 
 ## Publish
 
-Validates with `omarchy plugin validate` and `qmllint`. To list on the marketplace see [omarchyplugins.com/publish.html](https://omarchyplugins.com/publish.html) → submit the repo at [HANCORE-linux/omarchy-plugin-marketplace — Submit a plugin](https://github.com/HANCORE-linux/omarchy-plugin-marketplace/issues/new?template=submit-plugin.yml) (`Public GitHub repository` + valid `manifest.json`).
+Validates with `omarchy plugin validate` and `qmllint` (local — GitHub CI runs the portable JS/Python suite only, since Omarchy/Quickshell are not installable on generic runners). To list on the marketplace see [omarchyplugins.com/publish.html](https://omarchyplugins.com/publish.html) → submit the repo at [HANCORE-linux/omarchy-plugin-marketplace — Submit a plugin](https://github.com/HANCORE-linux/omarchy-plugin-marketplace/issues/new?template=submit-plugin.yml) (`Public GitHub repository` + valid `manifest.json`).
 
 ## Dev
 

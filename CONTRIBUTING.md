@@ -2,8 +2,8 @@
 
 ## Stack
 - **JS**: `node --test tests/Model.test.js` (no deps, Node 22 built-in `node:test`). `Model.js` is `.pragma library` — tests load it via `vm`.
-- **Python**: `python3 -m unittest discover -s tests/python -v` (or `pytest`). Covers `bin/fetch-manifest.py` slim + `bin/apply-theme.py` / `bin/set-wallpaper.py` fallback.
-- **QML**: `qmllint -I /usr/share/omarchy/shell -I /usr/lib/qt6/qml Panel.qml BarWidget.qml` + `omarchy plugin validate ./`
+- **Python**: `python3 -m unittest discover -s tests/python -v` (or `pytest`). Covers `bin/fetch-manifest.py` slim + contracts, `_sec` hardening (TOML, paths, deadline, manifest), apply/set-wallpaper end-to-end with isolated `HOME`.
+- **QML (local only)**: `qmllint -I /usr/share/omarchy/shell -I /usr/lib/qt6/qml Panel.qml BarWidget.qml` + `omarchy plugin validate ./`. GitHub CI cannot install Omarchy/Quickshell on generic runners, so it runs the portable JS/Python suite; always run `npm run test:qml` locally before a release.
 
 ## TDD loop
 1. `npm test` — red

@@ -484,7 +484,7 @@ Panel {
     if (root.themeSetExitCode === 0) {
       root.activationPending = true
       root.activateCheckCount = 0
-      root.activateCheckTimer.start()
+      activateCheckTimer.start()
     } else {
       root.applyPhase = 4
       root.applyMsg = "theme activation failed (exit " + root.themeSetExitCode + ")"
@@ -498,7 +498,7 @@ Panel {
   function evalActivation() {
     if (root.currentThemeSlug() === root.applySlug.toLowerCase()) {
       root.activationPending = false
-      root.activateCheckTimer.stop()
+      activateCheckTimer.stop()
       root.applyPhase = 3
       root.applyMsg = "\u2713 " + root.applySlug + (root.applyWarn ? " — background failed: " + root.applyWarn : "")
       root.operationKind = ""
@@ -506,12 +506,12 @@ Panel {
       root.activateCheckCount += 1
       if (root.activateCheckCount > 5) {
         root.activationPending = false
-        root.activateCheckTimer.stop()
+        activateCheckTimer.stop()
         root.applyPhase = 4
         root.applyMsg = "installed, but activation not confirmed (current: " + root.currentTheme + ")" + (root.applyWarn ? " — background failed: " + root.applyWarn : "")
         root.operationKind = ""
       } else {
-        root.activateCheckTimer.start()
+        activateCheckTimer.start()
       }
     }
   }

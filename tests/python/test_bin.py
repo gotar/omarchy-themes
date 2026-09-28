@@ -476,6 +476,13 @@ class TestPanelSource(unittest.TestCase):
         self.assertIn("openDetailAt(root.cursorIdx)", text)
         self.assertNotIn("openDetailAt(0)", text)
 
+    def test_activation_timer_called_by_id(self):
+        # ids are not properties of root: root.activateCheckTimer is undefined,
+        # so confirmation threw and the UI stuck on "activating…".
+        text = (REPO / "Panel.qml").read_text()
+        self.assertNotIn("root.activateCheckTimer", text)
+        self.assertIn("activateCheckTimer.start()", text)
+
     def test_fallback_uses_fullres(self):
         text = (REPO / "Panel.qml").read_text()
         self.assertIn('fallbackP = e ? (e.p || \"\")', text)
